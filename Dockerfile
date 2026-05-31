@@ -50,4 +50,4 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
     CMD pgrep -f "ultimate_reporter.py" || exit 1
 
 # Run
-CMD ["python", "-u", "massrepo.py"]
+CMD ["python", "-u", "ultimate_reporter.py"]
