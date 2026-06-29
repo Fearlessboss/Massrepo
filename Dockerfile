@@ -1,16 +1,14 @@
 # ═══════════════════════════════════════════════════════════════
-#  ⚡ Ultimate Telegram Reporter v13.0 — Dockerfile
+#  ⚡ Ultimate Telegram Reporter v16.0 — Dockerfile
 # ═══════════════════════════════════════════════════════════════
 FROM python:3.11-slim
 
-# Prevent .pyc & enable real-time logs
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TZ=Asia/Kolkata
 
-# System deps (timezone + ssl + build tools for cryptg/pysocks)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         tzdata \
         ca-certificates \
@@ -22,32 +20,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
-# Workdir
 WORKDIR /app
 
-# Install Python deps (pin major versions for stability)
+# Install all required packages
 RUN pip install --upgrade pip && \
     pip install \
         "python-telegram-bot==21.6" \
         "telethon==1.36.0" \
         "PySocks==1.7.1" \
+        "pymongo==4.10.0" \
         "cryptg==0.4.0" \
         "pyaes==1.6.1" \
         "rsa==4.9"
 
-# Copy bot source
+# Copy bot
 COPY ultimate_reporter.py /app/ultimate_reporter.py
 
-# Persistent dirs for sessions / logs / sudo / proxy health
+# Create necessary directories
 RUN mkdir -p /app/logs && \
     touch /app/accounts.json /app/sudo_users.json /app/proxy_health.json
 
-# Declare volumes so data survives container restarts
 VOLUME ["/app/logs", "/app"]
 
-# Healthcheck (basic — process alive)
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
     CMD pgrep -f "ultimate_reporter.py" || exit 1
 
-# Run
+# Final Run
 CMD ["python", "-u", "ultimate_reporter.py"]
