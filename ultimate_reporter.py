@@ -143,7 +143,7 @@ class C:
     BG_RED = "\033[41m"; BG_GRN = "\033[42m"
 
 def print_banner():
-    os.system("cls" if os.name == "nt" else "clear")
+    # os.system("cls" if os.name == "nt" else "clear")   # ← Yeh comment kar do
     print(f"{C.CYAN}{C.BOLD}")
     print(f"  ⚡ Ultimate Reporter v{BOT_VERSION} — running...{C.RESET}")
     print(f"{C.DIM}  Proxy mode: {'ON' if PROXY_ENABLED else 'OFF (direct)'}{C.RESET}\n")
@@ -157,9 +157,10 @@ class ColorFormatter(logging.Formatter):
         lvl = f"{col}{record.levelname:<7}{C.RESET}"
         return f"{C.DIM}[{ts}]{C.RESET} {lvl} {record.getMessage()}"
 
+# Logging setup
 handler = logging.StreamHandler()
 handler.setFormatter(ColorFormatter())
-logging.basicConfig(level=logging.INFO, handlers=[handler])
+logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)  # force=True added
 logging.getLogger("telethon").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
