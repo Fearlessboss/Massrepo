@@ -319,7 +319,6 @@ def db_remove_sudo(uid: int):
 
 # ----- gmails -----
 DEFAULT_GMAILS = [
-    {"email": "deviramrani489@gmail.com",      "password": "eprrbxhaibzwwhqv", "name": "Devi Ramrani"},
     {"email": "fearlessaditya322@gmail.com",   "password": "kmbpigpqrmlgyala", "name": "Aditya Mishra"},
     {"email": "moderatorhelper.org@gmail.com", "password": "loanhgpmocqmwbka", "name": "Moderator Helper"},
     {"email": "helpingpeople.or@gmail.com",    "password": "qpgoyrpuyesdxfnj", "name": "Community Support"},
