@@ -56,7 +56,7 @@ from telegram.ext import (
 # ══════════════════════════════════════════════════════════════════════
 # 🔐 CORE CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════
-BOT_TOKEN = "8561124015:AAGpEGpWyOjvsIwCPtGC2bHAuRZvhWpPRqE"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID    = 33628258
 API_HASH  = "0850762925b9c1715b9b122f7b753128"
 OWNER_ID  = 6980326908
