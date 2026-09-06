@@ -61,7 +61,7 @@ API_ID    = 33628258
 API_HASH  = "0850762925b9c1715b9b122f7b753128"
 OWNER_ID  = 6980326908
 
-MONGO_URL = "mongodb+srv://moderatorhelperorg_db_user:nze86usap2dYthZN@cluster0.uokrixs.mongodb.net/mydatabase?retryWrites=true&w=majority"
+MONGO_URL = os.getenv("MONGO_URL")
 MONGO_DB_NAME = "mydatabase"
 
 MAX_REPORTS_PER_ACCOUNT = 100
