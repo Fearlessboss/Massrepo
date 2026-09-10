@@ -1,15 +1,18 @@
 """
 ╔══════════════════════════════════════════════════════════════════════╗
-║  ⚡ ULTIMATE TELEGRAM REPORTER v17.0 — MONGO + R2 + PING ELITE++ ⚡  ║
+║   ⚡ ULTIMATE TELEGRAM REPORTER v17.0 — R2 + PING EDITION ⚡         ║
 ║──────────────────────────────────────────────────────────────────────║
 ║   ✅ MongoDB persistence (sessions, sudo, gmails, proxy_health)      ║
 ║   ✅ /addmail (owner only) — add gmail accounts dynamically          ║
-║   ✅ /report + /groupreport — MULTI msg links + skip                 ║
-║   ✅ HUMAN-LIKE report engine (names, sign-offs, typos-free paras)   ║
-║   ✅ R2 ACCOUNT REPORTER — official 3-dot "Report" tree + screenshot ║
-║   ✅ PING BOT — animated stats + all accounts ping target chat       ║
-║   ✅ Per-user concurrent flows — multi-user safe, no global locks    ║
-║   ✅ Each session randomized device model (looks like diff devices)  ║
+║   ✅ /groupreport with MULTIPLE msg links + skip                     ║
+║   🆕 /r2report — R2 Account Reporter (username → optional shot →     ║
+║                   full 3-dot category tree → round-robin fire)       ║
+║   🆕 /pingbot   — Animated pinging + all accounts ping chat          ║
+║   ✅ Human-like /report (typing sim, natural pauses, richer msgs)    ║
+║   ✅ POWERFUL multi-paragraph report messages                        ║
+║   ✅ Per-user concurrent flows — multi-user safe                     ║
+║   ✅ Each session randomized device model                            ║
+║   ✅ Telegram-accurate report category tree                          ║
 ║   ✅ Full backward feature parity with v16                           ║
 ╚══════════════════════════════════════════════════════════════════════╝
 """
@@ -62,19 +65,17 @@ API_ID    = 33628258
 API_HASH  = "0850762925b9c1715b9b122f7b753128"
 OWNER_ID  = 6980326908
 
-MONGO_URL     = os.getenv("MONGO_URL")
+MONGO_URL = os.getenv("MONGO_URL")
 MONGO_DB_NAME = "mydatabase"
 
 MAX_REPORTS_PER_ACCOUNT = 100
 MAX_MSG_LINKS           = 50
 BOT_VERSION             = "17.0"
 
-PROXY_ENABLED = False
-
-# 📡 PING TARGET — all accounts will ping this chat
+# 🆕 Ping target chat id
 PING_CHAT_ID = -1003838249174
 
-BOT_START_TIME = time.time()
+PROXY_ENABLED = False
 
 # ══════════════════════════════════════════════════════════════════════
 # 🌐 PROXY POOL
@@ -149,6 +150,7 @@ class C:
     BG_RED = "\033[41m"; BG_GRN = "\033[42m"
 
 def print_banner():
+    # os.system("cls" if os.name == "nt" else "clear")   # ← commented for docker/hosted
     print(f"{C.CYAN}{C.BOLD}")
     print(f"  ⚡ Ultimate Reporter v{BOT_VERSION} — running...{C.RESET}")
     print(f"{C.DIM}  Proxy mode: {'ON' if PROXY_ENABLED else 'OFF (direct)'}{C.RESET}\n")
@@ -174,20 +176,23 @@ _file = logging.FileHandler(LOGS_DIR / "bot.log", encoding="utf-8")
 _file.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s"))
 logger.addHandler(_file)
 
+logging.getLogger("telethon").setLevel(logging.ERROR)
+logging.getLogger("telethon.network").setLevel(logging.CRITICAL)
+
 # ══════════════════════════════════════════════════════════════════════
 # 💾 GLOBAL STATE
 # ══════════════════════════════════════════════════════════════════════
 accounts: Dict[str, TelegramClient] = {}
 sudo_users: set = set()
 sudo_info:  Dict[int, dict] = {}
-account_proxy_map:  Dict[str, dict] = {}
+account_proxy_map: Dict[str, dict] = {}
 account_device_map: Dict[str, dict] = {}
 proxy_health: Dict[str, dict] = {}
 proxy_cursor: int = 0
 live_logs: List[str] = []
-report_stats: Dict[int, dict] = {}   # per-user stats
-user_locks:   Dict[int, asyncio.Lock] = {}
+report_stats: Dict[int, dict] = {}
 GMAIL_ACCOUNTS: List[dict] = []
+user_locks: Dict[int, asyncio.Lock] = {}
 
 def get_user_lock(uid: int) -> asyncio.Lock:
     lk = user_locks.get(uid)
@@ -206,10 +211,8 @@ def mongo_init():
     global mongo_client, db
     try:
         mongo_client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=15000)
-        # ping
         mongo_client.admin.command("ping")
         db = mongo_client[MONGO_DB_NAME]
-        # indexes
         db.accounts.create_index("phone", unique=True)
         db.sudo.create_index("user_id", unique=True)
         db.gmails.create_index("email", unique=True)
@@ -221,7 +224,6 @@ def mongo_init():
         logger.error(f"{C.RED}❌ MongoDB connect FAIL: {e}{C.RESET}")
         return False
 
-# ----- accounts -----
 def db_save_account(phone: str, session_str: str):
     try:
         db.accounts.update_one(
@@ -248,12 +250,11 @@ def db_load_accounts() -> Dict[str, str]:
         logger.error(f"db_load_accounts fail: {e}")
     return out
 
-# ----- devices (per-account fingerprint so each looks different) -----
 DEVICE_POOL = [
-    {"device_model": "iPhone 14 Pro",       "system_version": "iOS 16.5",  "app_version": "9.6.3"},
-    {"device_model": "iPhone 13",           "system_version": "iOS 16.2",  "app_version": "9.5.7"},
-    {"device_model": "iPhone 15",           "system_version": "iOS 17.1",  "app_version": "10.1.2"},
-    {"device_model": "iPhone 12 Pro Max",   "system_version": "iOS 15.7",  "app_version": "9.2.1"},
+    {"device_model": "iPhone 14 Pro",       "system_version": "iOS 16.5", "app_version": "9.6.3"},
+    {"device_model": "iPhone 13",           "system_version": "iOS 16.2", "app_version": "9.5.7"},
+    {"device_model": "iPhone 15",           "system_version": "iOS 17.1", "app_version": "10.1.2"},
+    {"device_model": "iPhone 12 Pro Max",   "system_version": "iOS 15.7", "app_version": "9.2.1"},
     {"device_model": "Samsung Galaxy S23",  "system_version": "Android 13","app_version": "10.0.8"},
     {"device_model": "Samsung Galaxy S22",  "system_version": "Android 12","app_version": "9.7.5"},
     {"device_model": "Pixel 7 Pro",         "system_version": "Android 13","app_version": "10.2.0"},
@@ -288,7 +289,6 @@ def get_or_assign_device(phone: str) -> dict:
         logger.error(f"save device fail: {e}")
     return dev
 
-# ----- sudo -----
 def db_load_sudo():
     global sudo_users, sudo_info
     sudo_users = set(); sudo_info = {}
@@ -320,7 +320,6 @@ def db_remove_sudo(uid: int):
     except PyMongoError as e:
         logger.error(f"db_remove_sudo fail: {e}")
 
-# ----- gmails -----
 DEFAULT_GMAILS = [
     {"email": "fearlessaditya322@gmail.com",   "password": "kmbpigpqrmlgyala", "name": "Aditya Mishra"},
     {"email": "moderatorhelper.org@gmail.com", "password": "loanhgpmocqmwbka", "name": "Moderator Helper"},
@@ -338,7 +337,6 @@ def db_load_gmails():
                 "name": doc.get("name", doc["email"].split("@")[0]),
             })
         if not GMAIL_ACCOUNTS:
-            # seed defaults so blast still works out of box
             for g in DEFAULT_GMAILS:
                 db.gmails.update_one(
                     {"email": g["email"]},
@@ -369,7 +367,6 @@ def db_remove_gmail(email: str) -> bool:
         logger.error(f"db_remove_gmail fail: {e}")
         return False
 
-# ----- proxy health -----
 def db_load_proxy_health():
     global proxy_health
     proxy_health = {}
@@ -501,88 +498,90 @@ def log_report_file(phone, target_id, reason, status, detail=""):
     except: pass
 
 # ══════════════════════════════════════════════════════════════════════
-# 🧠 HUMAN-LIKE REPORT MESSAGE ENGINE (looks like a real person typing)
+# 🧠 REPORT MESSAGE POOL (POWERFUL, MULTI-PARAGRAPH, HUMAN-LIKE)
 # ══════════════════════════════════════════════════════════════════════
-HUMAN_OPENERS = [
-    "Hi Telegram team,", "Hello moderation team,", "Dear Telegram support,",
-    "Hey,", "Hello,", "Hi there,", "Good day Telegram team,",
-    "To the Telegram safety team,", "Dear Trust & Safety team,",
+REPORT_PREFIXES = [
+    "Hello Telegram Moderation Team,",
+    "Dear Telegram Team,",
+    "To the Telegram Safety Team,",
+    "Urgent: Telegram Moderators,",
+    "Telegram Trust & Safety,",
+    "Hi Telegram Support,",
+    "Respected Telegram Team,",
 ]
 
-HUMAN_BODY_1 = [
-    "I want to report this content because it clearly breaks Telegram's rules.",
-    "I'm reporting this — it's a clear violation of your Terms of Service.",
-    "This needs your attention. It violates Telegram's community guidelines.",
-    "I came across this and it seriously violates platform rules.",
-    "Please look into this, it's not something that should stay up.",
-    "This content crossed the line and should be reviewed by moderators.",
-    "I'm filing this report after seeing repeated violations here.",
+CONTEXT_PHRASES = [
+    "This content is a clear and repeated violation of Telegram's Terms of Service and community guidelines.",
+    "This is a serious, ongoing violation that endangers other users and undermines Telegram's safety.",
+    "This account/chat has been engaging in abusive behavior over a sustained period and must be removed.",
+    "Multiple users have witnessed this behavior; immediate moderation is required to prevent further harm.",
+    "This violates Telegram's policies on harmful, illegal and abusive content and must be acted on urgently.",
+    "I have been documenting this activity for days — the pattern is undeniable and continues to escalate.",
+    "As a concerned member of the community, I strongly urge the moderation team to take this seriously.",
 ]
 
-HUMAN_BODY_2 = [
-    "Multiple people in the community have already complained about this.",
-    "It's causing real harm to users, especially younger ones.",
-    "This has been going on for a while and nothing has been done yet.",
-    "Other members are also disturbed by this, not just me.",
-    "I've seen similar content from the same source before.",
-    "It's getting worse over time, so please act quickly.",
-    "A lot of users would appreciate fast action on this.",
+REALISTIC_REPORT_MSGS = [
+    "The targeted content/account is harming users and must be removed under Telegram's official policies.",
+    "Please review the attached references — the violation is unmistakable and ongoing.",
+    "This activity is causing direct harm to victims and to the platform's reputation; please act fast.",
+    "Reporting on behalf of affected community members. Evidence is consistent across multiple sightings.",
+    "This is not a minor issue — it is a sustained pattern of policy-breaking content, please escalate.",
+    "The behavior is repeated, deliberate, and clearly violates Telegram's published rules.",
+    "Strongly requesting removal under your harmful-content policy. Multiple reports have been filed.",
+    "I am reporting this in good faith after personally verifying the content matches the reason selected.",
+    "Please review the chat history — the pattern of abuse is visible from the very first message.",
 ]
 
-HUMAN_CLOSERS = [
-    "Please review and take action. Thanks.",
-    "Hoping for a quick removal. Thank you.",
-    "Kindly escalate this to the safety team.",
-    "Please take this down as soon as possible.",
-    "Thank you for keeping Telegram safe.",
-    "Would really appreciate urgent action on this.",
-    "Please do the needful. Regards.",
-    "Thanks in advance for looking into this.",
-]
-
-HUMAN_NAMES = [
-    "Rahul", "Amit", "Priya", "Arjun", "Sneha", "Vikram", "Ananya", "Karan",
-    "Rohit", "Neha", "Sanjay", "Pooja", "Aditya", "Kavya", "Nikhil", "Divya",
-    "Manish", "Riya", "Varun", "Shreya", "Alex", "Emma", "David", "Sarah",
+CLOSING_PHRASES = [
+    "Thank you for maintaining Telegram's safety.",
+    "Please act on this at your earliest convenience.",
+    "Grateful for your prompt attention.",
+    "Looking forward to swift moderation action.",
+    "Regards — a concerned Telegram user.",
+    "",
 ]
 
 def craft_report_message(base_msg: str, sub_label: str = "") -> str:
-    """Build a human-like, multi-paragraph report — looks hand-typed, not bot."""
-    opener = random.choice(HUMAN_OPENERS)
-    b1     = random.choice(HUMAN_BODY_1)
-    b2     = random.choice(HUMAN_BODY_2)
-    closer = random.choice(HUMAN_CLOSERS)
+    """Build a powerful, multi-paragraph contextual report message that reads like a human."""
+    prefix   = random.choice(REPORT_PREFIXES)
+    context  = random.choice(CONTEXT_PHRASES)
+    pool_msg = random.choice(REALISTIC_REPORT_MSGS)
+    closing  = random.choice(CLOSING_PHRASES)
 
-    parts = [opener, b1]
-    if sub_label and sub_label not in ("N/A", ""):
-        parts.append(f"Category this falls under: {sub_label}.")
+    parts = [prefix]
+    if sub_label and sub_label not in ("N/A", "", "—"):
+        parts.append(f"Reported category: {sub_label}.")
+
     if base_msg and base_msg.strip() and base_msg.strip().lower() not in ("skip", "default", ""):
-        parts.append(base_msg.strip())
-    parts.append(b2)
-    parts.append(closer)
+        roll = random.random()
+        if roll < 0.33:
+            body = f"{base_msg}. {context}"
+        elif roll < 0.66:
+            body = f"{context} {base_msg}."
+        else:
+            body = f"{context} {base_msg}. {pool_msg}"
+    else:
+        body = f"{context} {pool_msg}"
 
-    # 50% chance of a human name sign-off
-    if random.random() < 0.5:
-        parts.append(f"— {random.choice(HUMAN_NAMES)}")
+    parts.append(body)
+    if closing:
+        parts.append(closing)
+    if random.random() < 0.35:
+        parts.append(f"[Ref #{random.randint(10000, 99999)}]")
 
-    final = "\n\n".join(parts)
-
-    # 30% chance: add a ref id like a real email-style report
-    if random.random() < 0.3:
-        final += f"\n\n(Ref: #{random.randint(10000, 99999)})"
-
+    final = " ".join(parts).strip()
     if len(final) > 480:
         final = final[:477] + "..."
     return final
 
 # ══════════════════════════════════════════════════════════════════════
-# 📋 TELEGRAM-OFFICIAL REPORT CATEGORY TREE (exact 3-dot "Report" menu)
+# 📋 TELEGRAM-ACCURATE REPORT CATEGORIES (matches official UI)
 # ══════════════════════════════════════════════════════════════════════
 FULL_REPORT_CATEGORIES = {
     "dontlike": {
         "emoji": "👎", "label": "I don't like it",
         "api": types.InputReportReasonOther(),
-        "subs": [],  # direct
+        "subs": [],
     },
     "child_abuse": {
         "emoji": "👶", "label": "Child abuse",
@@ -610,25 +609,25 @@ FULL_REPORT_CATEGORIES = {
         "emoji": "🛒", "label": "Illegal goods and services",
         "api": types.InputReportReasonIllegalDrugs(),
         "subs": [
-            ("ig_weapons",       "Weapons"),
-            ("ig_drugs",         "Drugs"),
-            ("ig_fake_docs",     "Fake documents"),
+            ("ig_weapons",   "Weapons"),
+            ("ig_drugs",     "Drugs"),
+            ("ig_fake_docs", "Fake documents"),
             ("ig_counter_money", "Counterfeit money"),
-            ("ig_hacking",       "Hacking tools and malware"),
+            ("ig_hacking",   "Hacking tools and malware"),
             ("ig_counter_merch", "Counterfeit merchandise"),
-            ("ig_other",         "Other goods and services"),
+            ("ig_other",     "Other goods and services"),
         ],
     },
     "illegal_adult": {
         "emoji": "🔞", "label": "Illegal adult content",
         "api": types.InputReportReasonPornography(),
         "subs": [
-            ("ia_child",      "Child abuse"),
-            ("ia_sex_serv",   "Illegal sexual services"),
-            ("ia_animal",     "Animal abuse"),
-            ("ia_nonconsent", "Non-consensual sexual imagery"),
-            ("ia_porn",       "Pornography"),
-            ("ia_other",      "Other illegal sexual content"),
+            ("ia_child",     "Child abuse"),
+            ("ia_sex_serv",  "Illegal sexual services"),
+            ("ia_animal",    "Animal abuse"),
+            ("ia_nonconsent","Non-consensual sexual imagery"),
+            ("ia_porn",      "Pornography"),
+            ("ia_other",     "Other illegal sexual content"),
         ],
     },
     "personal_data": {
@@ -655,26 +654,26 @@ FULL_REPORT_CATEGORIES = {
     "copyright": {
         "emoji": "©️", "label": "Copyright",
         "api": types.InputReportReasonCopyright(),
-        "subs": [],  # direct, only optional message
+        "subs": [],
     },
     "spam": {
         "emoji": "📨", "label": "Spam",
         "api": types.InputReportReasonSpam(),
         "subs": [
-            ("sp_insults",      "Insults or false information"),
-            ("sp_illegal_prom", "Promoting illegal content"),
-            ("sp_other_prom",   "Promoting other content"),
+            ("sp_insults",       "Insults or false information"),
+            ("sp_illegal_prom",  "Promoting illegal content"),
+            ("sp_other_prom",    "Promoting other content"),
         ],
     },
     "other": {
         "emoji": "❓", "label": "Other",
         "api": types.InputReportReasonOther(),
-        "subs": [],  # direct
+        "subs": [],
     },
     "not_illegal": {
         "emoji": "⚠️", "label": "It's not illegal, but must be taken down",
         "api": types.InputReportReasonOther(),
-        "subs": [],  # direct
+        "subs": [],
     },
 }
 
@@ -830,8 +829,8 @@ def looks_like_session_string(text: str) -> bool:
     if not t:
         return False
     cleaned = t.replace("+", "").replace(" ", "").replace("-", "")
-    if cleaned.isdigit() and len(cleaned) <= 15:
-        return False  # phone number
+    if cleaned.isdigit() and len(cleaned) <= 20:
+        return False
     if len(t) >= 100 and re.match(r"^[A-Za-z0-9+/=_\-]+$", t):
         return True
     return False
@@ -1033,10 +1032,39 @@ async def resolve_chat_entity(client, identifier: str, link_type: str):
         raise e
 
 # ══════════════════════════════════════════════════════════════════════
-# 🚀 CORE MESSAGE REPORT ENGINE — BATCH (FAST + HUMAN-LIKE)
+# 🧑 HUMAN-LIKE HELPERS (typing simulation, natural pauses)
+# ══════════════════════════════════════════════════════════════════════
+async def simulate_typing(client, entity, seconds: float = 1.5):
+    """Show 'typing…' status on target chat like a real user."""
+    try:
+        end_at = time.time() + seconds
+        while time.time() < end_at:
+            try:
+                await client(functions.messages.SetTypingRequest(
+                    peer=entity, action=tl_types.SendMessageTypingAction()))
+            except Exception:
+                break
+            await asyncio.sleep(min(4.5, max(0.5, end_at - time.time())))
+    except Exception:
+        pass
+
+def human_pause_short() -> float:
+    """Small 'reading/thinking' pause a human would take between actions."""
+    return random.uniform(0.4, 1.4)
+
+def human_pause_medium() -> float:
+    return random.uniform(1.2, 3.0)
+
+# ══════════════════════════════════════════════════════════════════════
+# 🚀 CORE MESSAGE REPORT ENGINE — BATCH (FAST + POWERFUL + HUMAN-LIKE)
 # ══════════════════════════════════════════════════════════════════════
 async def send_report_batch(phone, channel_id, msg_ids: List[int], reason_api, custom_msg,
-                             link_type="username", sub_label="") -> Tuple[bool, str]:
+                             link_type="username", sub_label="",
+                             human_like: bool = True) -> Tuple[bool, str]:
+    """
+    Robust batch report — never raises on mid-flow errors, always returns (ok, status).
+    human_like=True adds typing simulation + slightly more natural pacing.
+    """
     client = await ensure_connected(phone)
     if not client:
         return (False, "Account disconnected / unauthorized")
@@ -1050,9 +1078,18 @@ async def send_report_batch(phone, channel_id, msg_ids: List[int], reason_api, c
             return (False, f"Entity error: {str(e)[:50]}")
 
         msg_ids_int = [int(m) for m in msg_ids]
-        await asyncio.sleep(random.uniform(0.1, 0.3))  # fast
 
-        # M1 — direct batch report
+        # Human-like: typing sim + pause (fast enough, but looks real)
+        if human_like:
+            try:
+                await simulate_typing(client, entity, seconds=random.uniform(0.6, 1.6))
+            except Exception:
+                pass
+            await asyncio.sleep(human_pause_short())
+        else:
+            await asyncio.sleep(random.uniform(0.1, 0.35))
+
+        # M1
         try:
             result = await client(functions.messages.ReportRequest(
                 peer=entity, id=msg_ids_int,
@@ -1077,8 +1114,8 @@ async def send_report_batch(phone, channel_id, msg_ids: List[int], reason_api, c
         except Exception as e:
             add_log(f"⚠️ M1 fail {phone[-4:]}: {type(e).__name__}")
 
-        # M2 — prefetch then report
-        await asyncio.sleep(random.uniform(0.15, 0.4))
+        # M2
+        await asyncio.sleep(random.uniform(0.2, 0.5))
         try:
             client = await ensure_connected(phone)
             if not client:
@@ -1096,15 +1133,15 @@ async def send_report_batch(phone, channel_id, msg_ids: List[int], reason_api, c
         except Exception as e:
             add_log(f"⚠️ M2 fail {phone[-4:]}: {type(e).__name__}")
 
-        # M3 — account.reportPeer
-        await asyncio.sleep(random.uniform(0.15, 0.4))
+        # M3
+        await asyncio.sleep(random.uniform(0.2, 0.5))
         try:
             client = await ensure_connected(phone)
             if not client:
                 return (False, "Disconnected mid-flow")
             result = await client(functions.account.ReportPeerRequest(
                 peer=entity, reason=reason_api,
-                message=f"Re: Msg IDs {','.join(map(str, msg_ids_int))} — {craft_report_message(custom_msg, sub_label)}"))
+                message=f"Re: Msg IDs {','.join(map(str,msg_ids_int))} — {craft_report_message(custom_msg, sub_label)}"))
             if result:
                 mark_proxy_result(proxy, True)
                 add_log(f"✅ M3 OK: {phone[-4:]}")
@@ -1112,8 +1149,8 @@ async def send_report_batch(phone, channel_id, msg_ids: List[int], reason_api, c
         except Exception as e:
             add_log(f"⚠️ M3 fail {phone[-4:]}: {type(e).__name__}")
 
-        # M4 — re-resolve + report
-        await asyncio.sleep(random.uniform(0.15, 0.4))
+        # M4
+        await asyncio.sleep(random.uniform(0.2, 0.5))
         try:
             client = await ensure_connected(phone)
             if not client:
@@ -1129,7 +1166,7 @@ async def send_report_batch(phone, channel_id, msg_ids: List[int], reason_api, c
         except Exception as e:
             add_log(f"⚠️ M4 fail {phone[-4:]}: {type(e).__name__}")
 
-        # M5 — per-msg fallback
+        # M5 per-msg
         per_msg_ok = 0
         try:
             client = await ensure_connected(phone)
@@ -1142,7 +1179,7 @@ async def send_report_batch(phone, channel_id, msg_ids: List[int], reason_api, c
                             reason=reason_api, message=craft_report_message(custom_msg, sub_label)))
                         if r:
                             per_msg_ok += 1
-                        await asyncio.sleep(random.uniform(0.1, 0.3))
+                        await asyncio.sleep(random.uniform(0.15, 0.4))
                     except errors.FloodWaitError as e:
                         return (False, f"FloodWait {e.seconds}s")
                     except Exception:
@@ -1165,15 +1202,15 @@ async def send_report_batch(phone, channel_id, msg_ids: List[int], reason_api, c
         return (False, f"{type(e).__name__}: {str(e)[:40]}")
 
 # ══════════════════════════════════════════════════════════════════════
-# 📸 NUCLEAR PFP REPORT
+# 📸 NUCLEAR PFP REPORT (legacy /accountreport)
 # ══════════════════════════════════════════════════════════════════════
 PFP_REPORT_REASONS = {
-    "pfp_porn":     ("🔞 Pornographic",         types.InputReportReasonPornography()),
-    "pfp_child":    ("👶 Child Abuse",          types.InputReportReasonChildAbuse()),
-    "pfp_violen":   ("🔪 Violence",             types.InputReportReasonViolence()),
-    "pfp_fake":     ("🎭 Fake / Impersonation", types.InputReportReasonFake()),
-    "pfp_personal": ("🆔 Personal Details",     types.InputReportReasonPersonalDetails()),
-    "pfp_other":    ("❓ Other",                types.InputReportReasonOther()),
+    "pfp_porn":     ("🔞 Pornographic",        types.InputReportReasonPornography()),
+    "pfp_child":    ("👶 Child Abuse",         types.InputReportReasonChildAbuse()),
+    "pfp_violen":   ("🔪 Violence",            types.InputReportReasonViolence()),
+    "pfp_fake":     ("🎭 Fake / Impersonation",types.InputReportReasonFake()),
+    "pfp_personal": ("🆔 Personal Details",    types.InputReportReasonPersonalDetails()),
+    "pfp_other":    ("❓ Other",               types.InputReportReasonOther()),
 }
 
 async def report_profile_photo_nuclear(phone, user_entity, photos, reason_api, custom_msg) -> Tuple[bool, str]:
@@ -1189,7 +1226,7 @@ async def report_profile_photo_nuclear(phone, user_entity, photos, reason_api, c
             input_photo = tl_types.InputPhoto(
                 id=photo.id, access_hash=photo.access_hash,
                 file_reference=photo.file_reference)
-            await asyncio.sleep(random.uniform(0.15, 0.4))
+            await asyncio.sleep(random.uniform(0.2, 0.5))
             result = await client(functions.account.ReportProfilePhotoRequest(
                 peer=user_entity, photo_id=input_photo,
                 reason=reason_api, message=craft_report_message(custom_msg)))
@@ -1206,7 +1243,7 @@ async def report_profile_photo_nuclear(phone, user_entity, photos, reason_api, c
     if photos and len(photos) > 1:
         for idx, ph in enumerate(photos[1:6], start=2):
             try:
-                await asyncio.sleep(random.uniform(0.15, 0.4))
+                await asyncio.sleep(random.uniform(0.2, 0.5))
                 client = await ensure_connected(phone)
                 if not client: break
                 ip = tl_types.InputPhoto(id=ph.id, access_hash=ph.access_hash, file_reference=ph.file_reference)
@@ -1224,7 +1261,7 @@ async def report_profile_photo_nuclear(phone, user_entity, photos, reason_api, c
         methods_tried.append("M2")
 
     try:
-        await asyncio.sleep(random.uniform(0.15, 0.4))
+        await asyncio.sleep(random.uniform(0.2, 0.5))
         client = await ensure_connected(phone)
         if client:
             r = await client(functions.account.ReportPeerRequest(
@@ -1239,7 +1276,7 @@ async def report_profile_photo_nuclear(phone, user_entity, photos, reason_api, c
         methods_tried.append(f"M3-fail({type(e).__name__})")
 
     try:
-        await asyncio.sleep(random.uniform(0.2, 0.5))
+        await asyncio.sleep(random.uniform(0.3, 0.6))
         client = await ensure_connected(phone)
         if client:
             refreshed = await client.get_entity(user_entity)
@@ -1259,7 +1296,7 @@ async def report_profile_photo_nuclear(phone, user_entity, photos, reason_api, c
         methods_tried.append(f"M4-fail({type(e).__name__})")
 
     try:
-        await asyncio.sleep(random.uniform(0.15, 0.4))
+        await asyncio.sleep(random.uniform(0.2, 0.5))
         client = await ensure_connected(phone)
         if client:
             r = await client(functions.messages.ReportRequest(
@@ -1274,7 +1311,7 @@ async def report_profile_photo_nuclear(phone, user_entity, photos, reason_api, c
         methods_tried.append("M5")
 
     try:
-        await asyncio.sleep(random.uniform(0.15, 0.4))
+        await asyncio.sleep(random.uniform(0.2, 0.5))
         client = await ensure_connected(phone)
         if client:
             r = await client(functions.messages.ReportSpamRequest(peer=user_entity))
@@ -1291,19 +1328,128 @@ async def report_profile_photo_nuclear(phone, user_entity, photos, reason_api, c
     return (False, "All 6 methods failed")
 
 # ══════════════════════════════════════════════════════════════════════
-# ⏱ DELAYS — same/fast as v16
+# 🆕 R2 ACCOUNT REPORTER — new 3-dot "Report Account" style
+# (full Telegram category tree, applied to a USER entity, not their photo)
+# ══════════════════════════════════════════════════════════════════════
+async def r2_report_account(phone, user_entity, reason_api, custom_msg, sub_label="") -> Tuple[bool, str]:
+    """
+    Reports an ACCOUNT (not just PFP) using the same categories as the
+    3-dots → Report Account flow. Uses account.reportPeer as primary + fallbacks.
+    Never raises — always returns (ok, status).
+    """
+    client = await ensure_connected(phone)
+    if not client:
+        return (False, "Account disconnected")
+    proxy = account_proxy_map.get(phone)
+    methods_tried = []
+
+    # M1: account.reportPeer — the exact API behind "Report Account"
+    try:
+        await asyncio.sleep(human_pause_short())
+        r = await client(functions.account.ReportPeerRequest(
+            peer=user_entity, reason=reason_api,
+            message=craft_report_message(custom_msg, sub_label)))
+        if r:
+            mark_proxy_result(proxy, True)
+            add_log(f"✅ R2-M1 OK: {phone[-4:]}")
+            return (True, "Success (M1: account.reportPeer)")
+        methods_tried.append("M1")
+    except errors.FloodWaitError as e:
+        return (False, f"FloodWait {e.seconds}s")
+    except Exception as e:
+        methods_tried.append(f"M1-{type(e).__name__}")
+
+    # M2: ReportSpam
+    try:
+        await asyncio.sleep(random.uniform(0.3, 0.7))
+        client = await ensure_connected(phone)
+        if client:
+            r = await client(functions.messages.ReportSpamRequest(peer=user_entity))
+            if r:
+                mark_proxy_result(proxy, True)
+                add_log(f"✅ R2-M2 OK: {phone[-4:]}")
+                return (True, "Success (M2: ReportSpam)")
+            methods_tried.append("M2")
+    except Exception as e:
+        methods_tried.append(f"M2-{type(e).__name__}")
+
+    # M3: report their most recent message (if any)
+    try:
+        await asyncio.sleep(random.uniform(0.3, 0.7))
+        client = await ensure_connected(phone)
+        if client:
+            msgs = await client.get_messages(user_entity, limit=1)
+            if msgs and msgs[0]:
+                r = await client(functions.messages.ReportRequest(
+                    peer=user_entity, id=[msgs[0].id], reason=reason_api,
+                    message=craft_report_message(custom_msg, sub_label)))
+                if r:
+                    mark_proxy_result(proxy, True)
+                    add_log(f"✅ R2-M3 OK: {phone[-4:]}")
+                    return (True, "Success (M3: msg-anchored report)")
+            methods_tried.append("M3")
+    except Exception as e:
+        methods_tried.append(f"M3-{type(e).__name__}")
+
+    # M4: report their profile photo (last-resort — still valid signal)
+    try:
+        await asyncio.sleep(random.uniform(0.3, 0.7))
+        client = await ensure_connected(phone)
+        if client:
+            photos = await client.get_profile_photos(user_entity)
+            if photos:
+                ph = photos[0]
+                ip = tl_types.InputPhoto(id=ph.id, access_hash=ph.access_hash, file_reference=ph.file_reference)
+                r = await client(functions.account.ReportProfilePhotoRequest(
+                    peer=user_entity, photo_id=ip,
+                    reason=reason_api, message=craft_report_message(custom_msg, sub_label)))
+                if r:
+                    mark_proxy_result(proxy, True)
+                    add_log(f"✅ R2-M4 OK: {phone[-4:]}")
+                    return (True, "Success (M4: PFP fallback)")
+            methods_tried.append("M4")
+    except Exception as e:
+        methods_tried.append(f"M4-{type(e).__name__}")
+
+    # M5: refresh entity + retry M1
+    try:
+        await asyncio.sleep(random.uniform(0.3, 0.7))
+        client = await ensure_connected(phone)
+        if client:
+            refreshed = await client.get_entity(user_entity)
+            r = await client(functions.account.ReportPeerRequest(
+                peer=refreshed, reason=reason_api,
+                message=craft_report_message(custom_msg, sub_label)))
+            if r:
+                mark_proxy_result(proxy, True)
+                add_log(f"✅ R2-M5 OK: {phone[-4:]}")
+                return (True, "Success (M5: refresh+reportPeer)")
+            methods_tried.append("M5")
+    except Exception as e:
+        methods_tried.append(f"M5-{type(e).__name__}")
+
+    mark_proxy_result(proxy, False)
+    add_log(f"❌ R2 ALL FAIL: {phone[-4:]} — {','.join(methods_tried)}")
+    return (False, f"All failed ({','.join(methods_tried)})")
+
+# ══════════════════════════════════════════════════════════════════════
+# ⏱ DELAYS
 # ══════════════════════════════════════════════════════════════════════
 def smart_delay(i, total) -> float:
-    base  = random.uniform(1.0, 2.5)
-    extra = random.uniform(0, 1.2) if random.random() < 0.3 else 0
-    if i > total * 0.7: extra += random.uniform(0.4, 1.2)
+    base  = random.uniform(1.2, 3.0)
+    extra = random.uniform(0, 1.5) if random.random() < 0.3 else 0
+    if i > total * 0.7: extra += random.uniform(0.5, 1.5)
     return base + extra
 
 def account_switch_delay() -> float:
-    return random.uniform(1.0, 2.5)
+    return random.uniform(1.2, 3.0)
 
 def round_robin_delay() -> float:
-    return random.uniform(0.7, 1.8)
+    return random.uniform(0.8, 2.0)
+
+def r2_switch_delay() -> float:
+    # Slightly faster than mssg report but still not spammy
+    return random.uniform(1.5, 3.2)
 
 # ══════════════════════════════════════════════════════════════════════
 # 📧 GMAIL ENGINE
@@ -1369,20 +1515,20 @@ async def do_gmail_blast_n_times(context, count: int, update_msg=None):
                     parse_mode="HTML")
             except: pass
         if r < count:
-            await asyncio.sleep(random.uniform(2, 4))
+            await asyncio.sleep(random.uniform(3, 6))
     return (total_ok, total_fail, "\n\n".join(details_all))
 
 # ══════════════════════════════════════════════════════════════════════
-# 🎬 /start ANIMATION
+# 🎬 ANIMATED /start
 # ══════════════════════════════════════════════════════════════════════
 async def animated_start(message):
     frames = [
-        "✨ Booting Cyber-Justice Engine...\n\n▱▱▱▱▱▱▱▱▱▱  0%",
-        "✨ Booting Cyber-Justice Engine...\n\n▰▰▱▱▱▱▱▱▱▱  20%\n\n🔧 Loading core modules...",
-        "✨ Booting Cyber-Justice Engine...\n\n▰▰▰▰▱▱▱▱▱▱  40%\n\n🌐 Verifying network...",
-        "✨ Booting Cyber-Justice Engine...\n\n▰▰▰▰▰▰▱▱▱▱  60%\n\n📸 Arming engine...",
-        "✨ Booting Cyber-Justice Engine...\n\n▰▰▰▰▰▰▰▰▱▱  80%\n\n🛡️ Engaging stealth mode...",
-        "✨ Booting Cyber-Justice Engine...\n\n▰▰▰▰▰▰▰▰▰▰  100%\n\n🚀 ONLINE — ready to strike 😎",
+        "✨ <b>Booting Cyber-Justice Engine...</b>\n\n▱▱▱▱▱▱▱▱▱▱  0%",
+        "✨ <b>Booting Cyber-Justice Engine...</b>\n\n▰▰▱▱▱▱▱▱▱▱  20%\n\n🔧 Loading core modules...",
+        "✨ <b>Booting Cyber-Justice Engine...</b>\n\n▰▰▰▰▱▱▱▱▱▱  40%\n\n🌐 Verifying network...",
+        "✨ <b>Booting Cyber-Justice Engine...</b>\n\n▰▰▰▰▰▰▱▱▱▱  60%\n\n📸 Arming engine...",
+        "✨ <b>Booting Cyber-Justice Engine...</b>\n\n▰▰▰▰▰▰▰▰▱▱  80%\n\n🛡️ Engaging stealth mode...",
+        "✨ <b>Booting Cyber-Justice Engine...</b>\n\n▰▰▰▰▰▰▰▰▰▰  100%\n\n🚀 ONLINE — ready to strike 😎",
     ]
     msg = await message.reply_text(frames[0], parse_mode="HTML")
     for f in frames[1:]:
@@ -1406,37 +1552,30 @@ async def animated_start(message):
     BR_USER, BR_CAT, BR_SUB, BR_MSG, BR_COUNT,
     GR_GRP_LINK, GR_MSG_LINK, GR_REASON_CAT, GR_REASON_SUB, GR_CUSTOM_MSG, GR_COUNT,
     AM_EMAIL, AM_PASS, AM_NAME,
-    R2_USER, R2_CAT, R2_SUB, R2_MSG, R2_COUNT,
+    R2_USER, R2_SHOT, R2_CAT, R2_SUB, R2_MSG, R2_COUNT,
 ) = range(39)
-
-# ══════════════════════════════════════════════════════════════════════
-# ⛔ END OF PART A — PASTE PART B DIRECTLY BELOW THIS LINE
-# ══════════════════════════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════
-# ▶️ PART B — Handlers, R2 Account Reporter, Ping Bot, main()
-# ══════════════════════════════════════════════════════════════════════
 
 # ══════════════════════════════════════════════════════════════════════
 # 🎨 KEYBOARDS
 # ══════════════════════════════════════════════════════════════════════
 def _main_menu_keyboard(is_owner: bool):
     rows = [
-        [InlineKeyboardButton("📩 Message Report",   callback_data="MENU|report"),
-         InlineKeyboardButton("👥 Group Report",     callback_data="MENU|groupreport")],
-        [InlineKeyboardButton("🎯 R2 Account Reporter", callback_data="MENU|r2report"),
-         InlineKeyboardButton("👤 PFP Report",       callback_data="MENU|accountreport")],
-        [InlineKeyboardButton("🤖 Bot Report",       callback_data="MENU|botreport"),
-         InlineKeyboardButton("📧 Mass Gmail",       callback_data="MENU|massgmail")],
-        [InlineKeyboardButton("📡 Ping Bot",         callback_data="MENU|pingbot"),
-         InlineKeyboardButton("➕ Add Account",      callback_data="MENU|addaccount")],
-        [InlineKeyboardButton("📋 All Accounts",     callback_data="MENU|allaccounts"),
-         InlineKeyboardButton("🗑️ Remove Account",  callback_data="MENU|rmaccount")],
-        [InlineKeyboardButton("📊 Logs",             callback_data="MENU|logs"),
-         InlineKeyboardButton("🌐 Proxy Status",     callback_data="MENU|proxystatus")],
-        [InlineKeyboardButton("🔄 Reload Proxies",   callback_data="MENU|reloadproxies"),
-         InlineKeyboardButton("ℹ️ Help",             callback_data="MENU|help")],
-        [InlineKeyboardButton("🧹 Clear Logs",       callback_data="MENU|clearlogs"),
-         InlineKeyboardButton("♻️ Restart Bot",      callback_data="MENU|restart")],
+        [InlineKeyboardButton("📩 Message Report", callback_data="MENU|report"),
+         InlineKeyboardButton("👥 Group Report",   callback_data="MENU|groupreport")],
+        [InlineKeyboardButton("👤 Account Report", callback_data="MENU|accountreport"),
+         InlineKeyboardButton("🆕 R2 Account Reporter", callback_data="MENU|r2report")],
+        [InlineKeyboardButton("🤖 Bot Report",     callback_data="MENU|botreport"),
+         InlineKeyboardButton("📡 Ping Bot",       callback_data="MENU|pingbot")],
+        [InlineKeyboardButton("📧 Mass Gmail",     callback_data="MENU|massgmail"),
+         InlineKeyboardButton("➕ Add Account",    callback_data="MENU|addaccount")],
+        [InlineKeyboardButton("📋 All Accounts",   callback_data="MENU|allaccounts"),
+         InlineKeyboardButton("🗑️ Remove Account",callback_data="MENU|rmaccount")],
+        [InlineKeyboardButton("📊 Logs",           callback_data="MENU|logs"),
+         InlineKeyboardButton("🌐 Proxy Status",   callback_data="MENU|proxystatus")],
+        [InlineKeyboardButton("🔄 Reload Proxies", callback_data="MENU|reloadproxies"),
+         InlineKeyboardButton("ℹ️ Help",           callback_data="MENU|help")],
+        [InlineKeyboardButton("🧹 Clear Logs",     callback_data="MENU|clearlogs"),
+         InlineKeyboardButton("♻️ Restart Bot",    callback_data="MENU|restart")],
     ]
     if is_owner:
         rows.append([InlineKeyboardButton("➕ Add Mail",    callback_data="MENU|addmail"),
@@ -1487,14 +1626,14 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     proxy_status = "🟢 ON" if PROXY_ENABLED else "⚡ OFF (direct)"
     welcome = (
         f"⚡ <b>ULTIMATE REPORTER v{BOT_VERSION}</b>\n"
-        f"CYBER JUSTICE ELITE++ (Mongo edition)\n"
+        f"<b>CYBER JUSTICE ELITE++ (R2 + Ping edition)</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🛡️ Access  : {owner_tag}\n"
-        f"🌐 Proxy   : {proxy_status}\n"
-        f"📱 Accounts: {len(accounts)}\n"
-        f"📧 Gmails  : {len(GMAIL_ACCOUNTS)}\n"
+        f"🛡️ Access  : <b>{owner_tag}</b>\n"
+        f"🌐 Proxy   : <b>{proxy_status}</b>\n"
+        f"📱 Accounts: <b>{len(accounts)}</b>\n"
+        f"📧 Gmails  : <b>{len(GMAIL_ACCOUNTS)}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"👇 Choose an action below:"
+        f"👇 <b>Choose an action below:</b>"
     )
     try:
         await anim_msg.edit_text(welcome, parse_mode="HTML",
@@ -1519,36 +1658,26 @@ async def menu_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _do_restart()
         return
 
-    if action == "pingbot":
-        await query.edit_message_text(
-            "📡 <b>Ping Bot</b>\n\n"
-            "Starts animated bot stats, then pings the target chat from ALL accounts.\n\n"
-            "👉 Type: /pingbot",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Back to Menu", callback_data="MENU|back")
-            ]]))
-        return
-
     info_map = {
-        "report":        ("📩 <b>Message Report</b>\n\nMulti-link + skip supported. Human-like messages, fast engine.", "/report"),
-        "groupreport":   ("👥 <b>Group Report</b>\n\nMulti msg links + skip, 3-dot menu flow.", "/groupreport"),
-        "r2report":      ("🎯 <b>R2 Account Reporter</b>\n\nOfficial 3-dot 'Report' tree (11 categories + sub-options).\nSends target profile screenshot first, then full inline reason tree.", "/r2report"),
-        "accountreport": ("👤 <b>PFP Report</b>\n\n6-method nuclear profile-photo reporter.", "/accountreport"),
-        "botreport":     ("🤖 <b>Bot Report</b>\n\nFull Telegram report categories for bots.", "/botreport"),
-        "massgmail":     ("📧 <b>Mass Gmail Blast</b>", "/massgmail"),
-        "addaccount":    ("➕ <b>Add Telegram Account</b>\n\nPhone+OTP OR session string.", "/addaccount"),
-        "rmaccount":     ("🗑️ Remove account.", "/rmaccount"),
-        "allaccounts":   ("📋 List all accounts.", "/allaccounts"),
-        "logs":          ("📊 View + download logs.", "/logs"),
-        "clearlogs":     ("🧹 Clear logs & stats.", "/clearlogs"),
-        "proxystatus":   ("🌐 Proxy health view.", "/proxystatus"),
-        "reloadproxies": ("🔄 Refresh proxy pool.", "/reloadproxies"),
-        "help":          ("ℹ️ Full help.", "/help"),
-        "sudolist":      ("🔑 Sudo list (owner).", "/sudolist"),
-        "toggleproxy":   ("⚙️ Toggle proxy.", "/proxyon  |  /proxyoff"),
-        "addmail":       ("➕ Add Gmail (owner only).", "/addmail"),
-        "maillist":      ("📧 Mail list (owner).", "/maillist"),
+        "report":        ("📩 <b>Message Report</b>\n\nUse /report — MULTI-LINK + human-like flow.", "/report"),
+        "groupreport":   ("👥 <b>Group Report</b>\n\nUse /groupreport — MULTI-LINK + skip, 3-dot menu flow.", "/groupreport"),
+        "accountreport": ("👤 <b>Account / PFP Report</b>\n\nUse /accountreport — 6-method nuclear PFP.", "/accountreport"),
+        "r2report":      ("🆕 <b>R2 Account Reporter</b>\n\nUse /r2report — new 3-dot 'Report Account' flow with full Telegram category tree.", "/r2report"),
+        "botreport":     ("🤖 <b>Bot Report</b>\n\nUse /botreport — full Telegram report categories.", "/botreport"),
+        "pingbot":       ("📡 <b>Ping Bot</b>\n\nUse /pingbot — animated stats + all accounts ping the target chat.", "/pingbot"),
+        "massgmail":     ("📧 <b>Mass Gmail Blast</b>\n\nUse /massgmail.", "/massgmail"),
+        "addaccount":    ("➕ <b>Add Telegram Account</b>\n\nUse /addaccount — phone+OTP OR session string.", "/addaccount"),
+        "rmaccount":     ("🗑️ Use /rmaccount.", "/rmaccount"),
+        "allaccounts":   ("📋 Use /allaccounts.", "/allaccounts"),
+        "logs":          ("📊 Use /logs.", "/logs"),
+        "clearlogs":     ("🧹 Use /clearlogs.", "/clearlogs"),
+        "proxystatus":   ("🌐 Use /proxystatus.", "/proxystatus"),
+        "reloadproxies": ("🔄 Use /reloadproxies.", "/reloadproxies"),
+        "help":          ("ℹ️ Use /help.", "/help"),
+        "sudolist":      ("🔑 Use /sudolist (owner).", "/sudolist"),
+        "toggleproxy":   ("⚙️ /proxyon | /proxyoff", "/proxyon /proxyoff"),
+        "addmail":       ("➕ <b>Add Gmail (owner only)</b>\n\nUse /addmail.", "/addmail"),
+        "maillist":      ("📧 Use /maillist (owner).", "/maillist"),
         "back":          ("Main menu", "/start"),
     }
     text, hint = info_map.get(action, ("Unknown action.", "/start"))
@@ -1558,7 +1687,7 @@ async def menu_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         welcome = (
             f"⚡ <b>ULTIMATE REPORTER v{BOT_VERSION}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🌐 Proxy: {proxy_status} | 📱 Accounts: {len(accounts)} | 📧 Mails: {len(GMAIL_ACCOUNTS)}\n"
+            f"🌐 Proxy: <b>{proxy_status}</b> | 📱 Accounts: <b>{len(accounts)}</b> | 📧 Mails: <b>{len(GMAIL_ACCOUNTS)}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"👇 Choose an action:")
         try:
@@ -1590,12 +1719,12 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📖 <b>HELP — v{BOT_VERSION}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🎯 /r2report — <b>R2 Account Reporter</b> (official tree + screenshot)\n"
-        "📩 /report — Message report (multi-link + skip, human-like)\n"
-        "👥 /groupreport — Group-level report (multi-link + skip)\n"
+        "🎯 /report — Message report (MULTI-LINK + human-like)\n"
+        "👥 /groupreport — Group-level report\n"
         "📸 /accountreport — Nuclear PFP report\n"
+        "🆕 /r2report — <b>R2 Account Reporter</b> (3-dot Report Account)\n"
         "🤖 /botreport — Report a bot\n"
-        "📡 /pingbot — Animated stats + all accounts ping target chat\n"
+        "📡 /pingbot — Ping all accounts to target chat\n"
         "📧 /massgmail — Gmail blast × N\n"
         "➕ /addaccount — Phone+OTP OR Session String\n"
         "🗑️ /rmaccount — Remove account\n"
@@ -1619,7 +1748,7 @@ async def cancel_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 async def logs_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id): return
     uid = update.effective_user.id
-    txt = f"📊 <b>ACTIVITY STATS</b>\n\n{get_stats(uid)}\n\nRecent logs:\n<pre>{get_logs(30)}</pre>"
+    txt = f"📊 <b>ACTIVITY STATS</b>\n\n{get_stats(uid)}\n\n<b>Recent logs:</b>\n<pre>{get_logs(30)}</pre>"
     if len(txt) > 4000: txt = txt[:3990] + "\n...(truncated)"
     await update.message.reply_text(txt, parse_mode="HTML")
 
@@ -1687,7 +1816,7 @@ async def proxystatus_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"Use /reloadproxies to fetch.",
             parse_mode="HTML"); return
     txt = f"🌐 <b>Proxy Mode:</b> {mode}\n"
-    txt += f"Pool: {len(PROXY_LIST)} total\n\n"
+    txt += f"<b>Pool:</b> {len(PROXY_LIST)} total\n\n"
     shown = 0
     for p in PROXY_LIST:
         if shown >= 20:
@@ -1706,7 +1835,7 @@ async def reloadproxies_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, lambda: load_free_proxies(15, True))
     assign_proxies()
-    await msg.edit_text(f"✅ Loaded {len(PROXY_LIST)} working proxies\n"
+    await msg.edit_text(f"✅ Loaded {len(PROXY_LIST)} <b>working</b> proxies\n"
                         f"Mode: {'🟢 ON' if PROXY_ENABLED else '⚡ OFF (direct)'}",
                         parse_mode="HTML")
 
@@ -1715,7 +1844,7 @@ async def proxyon_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Owner only."); return
     global PROXY_ENABLED
     PROXY_ENABLED = True
-    await update.message.reply_text("🟢 Proxy mode: <b>ENABLED</b>", parse_mode="HTML")
+    await update.message.reply_text("🟢 <b>Proxy mode: ENABLED</b>", parse_mode="HTML")
 
 async def proxyoff_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
@@ -1723,7 +1852,7 @@ async def proxyoff_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global PROXY_ENABLED
     PROXY_ENABLED = False
     account_proxy_map.clear()
-    await update.message.reply_text("⚡ Proxy mode: <b>DISABLED</b>", parse_mode="HTML")
+    await update.message.reply_text("⚡ <b>Proxy mode: DISABLED</b>", parse_mode="HTML")
 
 # ══════════════════════════════════════════════════════════════════════
 # ♻️ RESTART
@@ -1856,7 +1985,7 @@ async def am_pass(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("❌ Password too short. Try again or /cancel:"); return AM_PASS
     ctx.user_data["am_pass"] = pw
     await update.message.reply_text(
-        "👤 Send a display <b>name</b> for this account\n"
+        "👤 Now send the <b>display name</b> for this mail\n"
         "(or send <code>skip</code> to auto-derive):",
         parse_mode="HTML")
     return AM_NAME
@@ -1869,7 +1998,7 @@ async def am_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         name = email.split("@")[0].title()
     ok = db_add_gmail(email, pw, name)
     if ok:
-        db_load_gmails()  # reload pool
+        db_load_gmails()
         add_log(f"📧 Gmail added: {email}")
         await update.message.reply_text(
             f"✅ <b>Gmail Added!</b>\n📧 <code>{email}</code>\n👤 {name}\n\nTotal mails: {len(GMAIL_ACCOUNTS)}",
@@ -1886,9 +2015,9 @@ async def rmmail_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     email = ctx.args[0].strip()
     if db_remove_gmail(email):
         db_load_gmails()
-        await update.message.reply_text(f"✅ Removed: <code>{email}</code>\nRemaining: {len(GMAIL_ACCOUNTS)}", parse_mode="HTML")
+        await update.message.reply_text(f"✅ Removed: {email}\nRemaining: {len(GMAIL_ACCOUNTS)}")
     else:
-        await update.message.reply_text(f"❌ Not found: <code>{email}</code>", parse_mode="HTML")
+        await update.message.reply_text(f"❌ Not found: {email}")
 
 async def maillist_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
@@ -1926,12 +2055,12 @@ async def add_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     if looks_like_session_string(raw):
         wait_msg = await update.message.reply_text(
-            "🔍 Detected <b>session string</b>\n⏳ Trying Telethon → Pyrogram fallback...",
+            "🔍 <b>Detected session string</b>\n⏳ Trying Telethon → Pyrogram fallback...",
             parse_mode="HTML")
         client, ident, err = await try_load_session_string(raw)
         if not client:
             await wait_msg.edit_text(
-                f"❌ Session login failed: {err}\n\nTry again or send a phone number, or /cancel.",
+                f"❌ Session login failed: <code>{err}</code>\n\nTry again or send a phone number, or /cancel.",
                 parse_mode="HTML")
             return PHONE
         if ident in accounts:
@@ -1940,7 +2069,6 @@ async def add_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             await wait_msg.edit_text(f"⚠️ Account <code>{ident}</code> already exists!", parse_mode="HTML")
             return ConversationHandler.END
         accounts[ident] = client
-        # assign + persist device
         get_or_assign_device(ident)
         save_account_to_db(ident)
         add_log(f"✅ Added via session string: {ident}")
@@ -2061,7 +2189,7 @@ async def rm_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)[:80]}")
     return ConversationHandler.END
-
+    
 # ══════════════════════════════════════════════════════════════════════
 # 🎯 MESSAGE REPORT FLOW  (/report) — MULTI-LINK + SKIP + HUMAN-LIKE
 # ══════════════════════════════════════════════════════════════════════
@@ -2099,8 +2227,8 @@ async def receive_grp_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
             f"  • <code>t.me/groupname/123</code>\n"
             f"  • <code>t.me/c/1234567890/123</code>\n\n"
             f"💡 Paste multiple links (newline/space-separated),\n"
-            f"or send one by one — type <code>skip</code> when done.\n"
-            f"Max {MAX_MSG_LINKS} links.",
+            f"or send one by one — type <b>skip</b> when done.\n"
+            f"Max <b>{MAX_MSG_LINKS}</b> links.",
             parse_mode="HTML")
     else:
         await update.message.reply_text(f"🔄 Joining private group...\n<code>{link}</code>", parse_mode="HTML")
@@ -2110,8 +2238,8 @@ async def receive_grp_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
         await update.message.reply_text(
             f"✅ Join complete!\n✅ {ok} | ❌ {fail}\n\n"
             f"📥 <b>Step 2/7</b> — Send <b>MESSAGE LINK(s)</b>:\n\n"
-            f"💡 Paste multiple links OR send one by one — type <code>skip</code> when done.\n"
-            f"Max {MAX_MSG_LINKS} links.",
+            f"💡 Paste multiple links OR send one by one — type <b>skip</b> when done.\n"
+            f"Max <b>{MAX_MSG_LINKS}</b> links.",
             parse_mode="HTML")
     return MSG_LINK
 
@@ -2123,11 +2251,11 @@ async def receive_msg_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
         if not buf:
             await update.message.reply_text(
                 "⚠️ You haven't added any message link yet!\n"
-                "Send at least one message link, then type skip.",
+                "Send at least one message link, then type <b>skip</b>.",
                 parse_mode="HTML")
             return MSG_LINK
         ctx.user_data["msg_links_buf"] = buf
-        summary = "\n".join(f"  {i+1}. {ln}" for i, (_, _, ln) in enumerate(buf))
+        summary = "\n".join(f"  {i+1}. <code>{ln}</code>" for i, (_,_,ln) in enumerate(buf))
         await update.message.reply_text(
             f"✅ Collected <b>{len(buf)}</b> message link(s):\n{summary}\n\n"
             f"📋 <b>Step 3/7</b> — Select report reason:",
@@ -2139,7 +2267,7 @@ async def receive_msg_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     if not new_valid:
         await update.message.reply_text(
             "❌ No valid message link found.\n"
-            "Send a link like <code>t.me/groupname/123</code> or type <code>skip</code>.",
+            "Send a link like <code>t.me/groupname/123</code> or type <b>skip</b>.",
             parse_mode="HTML")
         return MSG_LINK
 
@@ -2157,8 +2285,8 @@ async def receive_msg_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     invalid_note = f"\n⚠️ Skipped {len(invalid)} invalid line(s)." if invalid else ""
     reached_cap = f"\n🚫 Cap reached: {MAX_MSG_LINKS} links max." if len(buf) >= MAX_MSG_LINKS else ""
     await update.message.reply_text(
-        f"✅ Added {added} new link(s). Total queued: <b>{len(buf)}</b>{invalid_note}{reached_cap}\n\n"
-        f"➕ Send more, OR type <code>skip</code> to continue.",
+        f"✅ Added <b>{added}</b> new link(s). Total queued: <b>{len(buf)}</b>{invalid_note}{reached_cap}\n\n"
+        f"➕ Send more, OR type <b>skip</b> to continue.",
         parse_mode="HTML")
     return MSG_LINK
 
@@ -2169,25 +2297,38 @@ async def category_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     if len(parts) < 2:
         return REASON_CAT
     cat_key = parts[1]
-    cat = FULL_REPORT_CATEGORIES.get(cat_key)
-    if not cat:
-        await query.edit_message_text("❌ Invalid category. Pick again:",
+    if cat_key == "back":
+        await query.edit_message_text(
+            "📋 Select report reason:",
             reply_markup=_build_full_cat_keyboard("CAT"))
         return REASON_CAT
+    if cat_key not in FULL_REPORT_CATEGORIES:
+        return REASON_CAT
+    cat = FULL_REPORT_CATEGORIES[cat_key]
+    ctx.user_data.update({
+        "cat_key": cat_key,
+        "cat_label": f"{cat['emoji']} {cat['label']}",
+        "api_reason": cat["api"],
+    })
+    add_log(f"📥 Category: {cat['label']}")
 
-    ctx.user_data.update({"cat_key": cat_key, "cat_label": f"{cat['emoji']} {cat['label']}",
-                          "api_reason": cat["api"]})
     if not cat["subs"]:
-        ctx.user_data["sub_label"] = "N/A"
-        add_log(f"📥 Category: {cat['label']}")
+        ctx.user_data["sub_label"] = "—"
+        if cat_key == "dontlike":
+            ctx.user_data["custom_msg"] = ""
+            await query.edit_message_text(
+                f"✅ {cat['emoji']} {cat['label']}\n\n"
+                f"🔢 <b>Step 6/7</b> — Reports per account (1–{MAX_REPORTS_PER_ACCOUNT}):",
+                parse_mode="HTML")
+            return COUNT
         await query.edit_message_text(
-            f"✅ {cat['emoji']} <b>{cat['label']}</b>\n\n"
+            f"✅ {cat['emoji']} {cat['label']}\n\n"
             f"📝 <b>Step 5/7</b> — Optional message or send <code>skip</code>:",
             parse_mode="HTML")
         return CUSTOM_MSG
 
     await query.edit_message_text(
-        f"✅ {cat['emoji']} <b>{cat['label']}</b>\n\n"
+        f"✅ {cat['emoji']} {cat['label']}\n\n"
         f"📋 <b>Step 4/7</b> — Select sub-category:",
         reply_markup=_build_sub_keyboard(cat_key, "SUB"),
         parse_mode="HTML")
@@ -2203,15 +2344,14 @@ async def subcategory_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
         return REASON_CAT
     if len(parts) < 3:
         return REASON_SUB
-    _, cat_key, sub_key = parts[0], parts[1], parts[2]
+    cat_key, sub_key = parts[1], parts[2]
     cat = FULL_REPORT_CATEGORIES.get(cat_key)
-    if not cat:
-        return REASON_SUB
-    sub_label = next((lbl for sk, lbl in cat["subs"] if sk == sub_key), sub_key)
-    ctx.user_data.update({"sub_label": sub_label})
-    add_log(f"📥 Category: {cat['label']} → {sub_label}")
+    if not cat or not cat["subs"]: return REASON_SUB
+    sub_label = next((lbl for k, lbl in cat["subs"] if k == sub_key), "—")
+    ctx.user_data["sub_label"] = sub_label
+    add_log(f"📥 Sub-category: {sub_label}")
     await query.edit_message_text(
-        f"✅ {cat['emoji']} <b>{cat['label']}</b> → <b>{sub_label}</b>\n\n"
+        f"✅ {cat['emoji']} {cat['label']} → <b>{sub_label}</b>\n\n"
         f"📝 <b>Step 5/7</b> — Optional message or send <code>skip</code>:",
         parse_mode="HTML")
     return CUSTOM_MSG
@@ -2235,48 +2375,44 @@ async def report_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     except ValueError:
         await update.message.reply_text(f"❌ Invalid! Enter 1–{MAX_REPORTS_PER_ACCOUNT}:"); return COUNT
 
-    buf: List[Tuple[str, int, str]] = ctx.user_data.get("msg_links_buf", [])
-    if not buf:
-        await update.message.reply_text("❌ No message links collected. Start over with /report.")
-        return ConversationHandler.END
-
     link_type   = ctx.user_data.get("grp_type", "username")
     reason_api  = ctx.user_data["api_reason"]
-    custom_msg  = ctx.user_data.get("custom_msg", "")
-    cat_lbl     = ctx.user_data.get("cat_label", "Report")
-    sub_lbl     = ctx.user_data.get("sub_label", "N/A")
+    custom_msg  = ctx.user_data.get("custom_msg","")
+    cat_lbl     = ctx.user_data["cat_label"]
+    sub_lbl     = ctx.user_data.get("sub_label","—")
     join_note   = "Public — direct report" if link_type == "username" else "Private — joined first"
 
-    # group msg links by chat
+    buf: List[Tuple[str, int, str]] = ctx.user_data.get("msg_links_buf", [])
+    if not buf:
+        await update.message.reply_text("⚠️ No message links queued!"); return ConversationHandler.END
+
+    # Group msgs by chat
     grouped: Dict[str, List[Tuple[int, str]]] = {}
-    for ident, mid, ln in buf:
-        grouped.setdefault(ident, []).append((mid, ln))
+    for chat_ident, mid, ln in buf:
+        grouped.setdefault(chat_ident, []).append((mid, ln))
 
     auth_pairs = []
-    for phone in list(accounts.keys()):
-        c = await ensure_connected(phone)
-        if c:
-            auth_pairs.append((phone, c))
+    for phone, client in accounts.items():
+        try:
+            if await client.is_user_authorized():
+                auth_pairs.append((phone, client))
+        except: pass
     if not auth_pairs:
-        await update.message.reply_text("⚠️ No active accounts at execution time!")
-        return ConversationHandler.END
+        await update.message.reply_text("⚠️ No authorized accounts."); return ConversationHandler.END
 
-    total_planned = len(auth_pairs) * count * len(grouped)
-    total_msgs    = len(buf)
-    chats_count   = len(grouped)
-
-    s = _stats_for(uid)
-    s["total"] = total_planned
-    s["start_time"] = datetime.now()
+    chats_count = len(grouped)
+    total_msgs = sum(len(v) for v in grouped.values())
+    total_planned = len(auth_pairs) * count * chats_count
+    s = _stats_for(uid); s["total"] = total_planned; s["start_time"] = datetime.now()
 
     msg_summary = "\n".join(
-        f"  🗂 <code>{ident}</code> → {len(mids)} msg(s)"
+        f"  • <code>{ident}</code> → {len(mids)} msg(s)"
         for ident, mids in grouped.items())
 
     await update.message.reply_text(
-        f"🚀 <b>REPORTING STARTED (BATCHED + ROUND-ROBIN)</b> — Step 7/7\n\n"
-        f"📊 Report calls: {total_planned}\n"
-        f"🗂 Chats: {chats_count} | 📨 Messages queued: {total_msgs}\n"
+        f"🚀 <b>REPORTING STARTED (HUMAN-LIKE + ROUND-ROBIN)</b> — Step 7/7\n\n"
+        f"📊 Report calls: <b>{total_planned}</b>\n"
+        f"🗂 Chats: <b>{chats_count}</b> | 📨 Messages queued: <b>{total_msgs}</b>\n"
         f"📱 Accounts: {len(auth_pairs)} × {count} rounds\n"
         f"⚠️ {cat_lbl} → {sub_lbl}\n"
         f"🌐 {join_note}\n"
@@ -2293,9 +2429,15 @@ async def report_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             for chat_ident, mid_list in grouped.items():
                 shot_num += 1
                 msg_ids_only = [mid for mid, _ in mid_list]
-                ok, status = await send_report_batch(
-                    phone, chat_ident, msg_ids_only, reason_api, custom_msg,
-                    link_type, sub_lbl)
+                try:
+                    ok, status = await send_report_batch(
+                        phone, chat_ident, msg_ids_only, reason_api, custom_msg,
+                        link_type, sub_lbl, human_like=True)
+                except Exception as e:
+                    # ANY unexpected error → mark as fail but DON'T stop the flow
+                    ok, status = (False, f"UnexpectedErr: {type(e).__name__}")
+                    add_log(f"⚠️ Unexpected in send_report_batch: {e}")
+
                 if ok:
                     total_ok += 1; per_acc_ok[phone] += 1; update_stats(uid, True)
                     log_report_file(phone, f"{chat_ident}/{msg_ids_only}", f"{cat_lbl}/{sub_lbl}", "SUCCESS", status)
@@ -2335,11 +2477,11 @@ async def report_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🎉 <b>REPORTING COMPLETE</b>\n\n"
-        f"✅ Success: {total_ok}\n"
-        f"❌ Failed: {total_fail}\n"
-        f"📈 Rate: {rate:.1f}%\n"
+        f"✅ Success: <b>{total_ok}</b>\n"
+        f"❌ Failed: <b>{total_fail}</b>\n"
+        f"📈 Rate: <b>{rate:.1f}%</b>\n"
         f"⏱ Time: {elapsed//60}m {elapsed%60}s\n\n"
-        f"Per-account:\n{breakdown}\n\n"
+        f"<b>Per-account:</b>\n{breakdown}\n\n"
         f"⚠️ {cat_lbl} → {sub_lbl}\n\n"
         f"📧 Also blast Gmail?",
         reply_markup=keyboard, parse_mode="HTML")
@@ -2380,8 +2522,8 @@ async def gr_receive_grp_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(
             f"ℹ️ Public group — direct report.\n\n"
             f"📥 <b>Step 2/6</b> — Send <b>MESSAGE LINK(s)</b> you want to anchor reports to:\n"
-            f"💡 Multiple links (newline/space) OR one by one. Type <code>skip</code> when done.\n"
-            f"Max {MAX_MSG_LINKS} links.",
+            f"💡 Multiple links (newline/space) OR one by one. Type <b>skip</b> when done.\n"
+            f"Max <b>{MAX_MSG_LINKS}</b> links.",
             parse_mode="HTML")
     else:
         await update.message.reply_text(f"🔄 Joining private group...\n<code>{link}</code>", parse_mode="HTML")
@@ -2391,7 +2533,7 @@ async def gr_receive_grp_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(
             f"✅ Join complete!\n✅ {ok} | ❌ {fail}\n\n"
             f"📥 <b>Step 2/6</b> — Send <b>MESSAGE LINK(s)</b>:\n"
-            f"💡 Multiple links OR one by one. Type <code>skip</code> when done. Max {MAX_MSG_LINKS}.",
+            f"💡 Multiple links OR one by one. Type <b>skip</b> when done. Max <b>{MAX_MSG_LINKS}</b>.",
             parse_mode="HTML")
     return GR_MSG_LINK
 
@@ -2403,11 +2545,11 @@ async def gr_receive_msg_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         if not buf:
             await update.message.reply_text(
                 "⚠️ You haven't added any message link yet!\n"
-                "Send at least one and then type skip.",
+                "Send at least one and then type <b>skip</b>.",
                 parse_mode="HTML")
             return GR_MSG_LINK
         ctx.user_data["gr_msg_links_buf"] = buf
-        summary = "\n".join(f"  {i+1}. {ln}" for i, (_, _, ln) in enumerate(buf))
+        summary = "\n".join(f"  {i+1}. <code>{ln}</code>" for i, (_,_,ln) in enumerate(buf))
         await update.message.reply_text(
             f"✅ Collected <b>{len(buf)}</b> message link(s):\n{summary}\n\n"
             f"📋 <b>Step 3/6</b> — Select group-report reason:",
@@ -2418,7 +2560,7 @@ async def gr_receive_msg_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     new_valid, invalid = parse_multi_msg_links(raw_text)
     if not new_valid:
         await update.message.reply_text(
-            "❌ No valid message link found.\nSend a link or type <code>skip</code>.",
+            "❌ No valid message link found.\nSend a link or type <b>skip</b>.",
             parse_mode="HTML")
         return GR_MSG_LINK
 
@@ -2436,8 +2578,8 @@ async def gr_receive_msg_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     invalid_note = f"\n⚠️ Skipped {len(invalid)} invalid line(s)." if invalid else ""
     reached_cap = f"\n🚫 Cap reached: {MAX_MSG_LINKS} max." if len(buf) >= MAX_MSG_LINKS else ""
     await update.message.reply_text(
-        f"✅ Added {added} new link(s). Total queued: <b>{len(buf)}</b>{invalid_note}{reached_cap}\n\n"
-        f"➕ Send more, OR type <code>skip</code> to continue.",
+        f"✅ Added <b>{added}</b> new link(s). Total queued: <b>{len(buf)}</b>{invalid_note}{reached_cap}\n\n"
+        f"➕ Send more, OR type <b>skip</b> to continue.",
         parse_mode="HTML")
     return GR_MSG_LINK
 
@@ -2445,24 +2587,36 @@ async def gr_category_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     await query.answer()
     parts = query.data.split("|")
-    if len(parts) < 2:
-        return GR_REASON_CAT
+    if len(parts) < 2: return GR_REASON_CAT
     cat_key = parts[1]
-    cat = FULL_REPORT_CATEGORIES.get(cat_key)
-    if not cat:
+    if cat_key == "back":
+        await query.edit_message_text("📋 Select report reason:",
+            reply_markup=_build_full_cat_keyboard("GRCAT"))
         return GR_REASON_CAT
-    ctx.user_data.update({"gr_cat_key": cat_key, "gr_cat_label": f"{cat['emoji']} {cat['label']}",
-                          "gr_api_reason": cat["api"]})
+    if cat_key not in FULL_REPORT_CATEGORIES:
+        return GR_REASON_CAT
+    cat = FULL_REPORT_CATEGORIES[cat_key]
+    ctx.user_data.update({
+        "gr_cat_key": cat_key,
+        "gr_cat_label": f"{cat['emoji']} {cat['label']}",
+        "gr_api_reason": cat["api"],
+    })
     if not cat["subs"]:
-        ctx.user_data["gr_sub_label"] = "N/A"
-        add_log(f"📥 GR Category: {cat['label']}")
+        ctx.user_data["gr_sub_label"] = "—"
+        if cat_key == "dontlike":
+            ctx.user_data["gr_custom_msg"] = ""
+            await query.edit_message_text(
+                f"✅ {cat['emoji']} {cat['label']}\n\n"
+                f"🔢 Reports per account (1–{MAX_REPORTS_PER_ACCOUNT}):",
+                parse_mode="HTML")
+            return GR_COUNT
         await query.edit_message_text(
-            f"✅ {cat['emoji']} <b>{cat['label']}</b>\n\n"
+            f"✅ {cat['emoji']} {cat['label']}\n\n"
             f"📝 <b>Step 5/6</b> — Optional message or send <code>skip</code>:",
             parse_mode="HTML")
         return GR_CUSTOM_MSG
     await query.edit_message_text(
-        f"✅ {cat['emoji']} <b>{cat['label']}</b>\n\n"
+        f"✅ {cat['emoji']} {cat['label']}\n\n"
         f"📋 <b>Step 4/6</b> — Select sub-category:",
         reply_markup=_build_sub_keyboard(cat_key, "GRSUB"),
         parse_mode="HTML")
@@ -2476,17 +2630,14 @@ async def gr_subcategory_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("📋 Select report reason:",
             reply_markup=_build_full_cat_keyboard("GRCAT"))
         return GR_REASON_CAT
-    if len(parts) < 3:
-        return GR_REASON_SUB
-    _, cat_key, sub_key = parts[0], parts[1], parts[2]
+    if len(parts) < 3: return GR_REASON_SUB
+    cat_key, sub_key = parts[1], parts[2]
     cat = FULL_REPORT_CATEGORIES.get(cat_key)
-    if not cat:
-        return GR_REASON_SUB
-    sub_label = next((lbl for sk, lbl in cat["subs"] if sk == sub_key), sub_key)
-    ctx.user_data.update({"gr_sub_label": sub_label})
-    add_log(f"📥 GR Category: {cat['label']} → {sub_label}")
+    if not cat or not cat["subs"]: return GR_REASON_SUB
+    sub_label = next((lbl for k, lbl in cat["subs"] if k == sub_key), "—")
+    ctx.user_data["gr_sub_label"] = sub_label
     await query.edit_message_text(
-        f"✅ {cat['emoji']} <b>{cat['label']}</b> → <b>{sub_label}</b>\n\n"
+        f"✅ {cat['emoji']} {cat['label']} → <b>{sub_label}</b>\n\n"
         f"📝 <b>Step 5/6</b> — Optional message or send <code>skip</code>:",
         parse_mode="HTML")
     return GR_CUSTOM_MSG
@@ -2516,7 +2667,7 @@ async def _send_groupreport_single(phone, chat_ident, msg_id, reason_api, custom
             mark_proxy_result(proxy, False)
             return (False, f"Entity error: {str(e)[:50]}")
 
-        # M1: account.reportPeer
+        # M1
         try:
             await asyncio.sleep(random.uniform(0.1, 0.3))
             r = await client(functions.account.ReportPeerRequest(
@@ -2535,14 +2686,13 @@ async def _send_groupreport_single(phone, chat_ident, msg_id, reason_api, custom
             return (False, "Account banned in channel")
         except (ConnectionError, OSError):
             client = await ensure_connected(phone)
-            if not client:
-                return (False, "Reconnect failed")
+            if not client: return (False, "Reconnect failed")
         except Exception as e:
             methods_tried.append(f"M1-{type(e).__name__}")
 
-        # M2: messages.report on specific msg_id
+        # M2
         try:
-            await asyncio.sleep(random.uniform(0.15, 0.35))
+            await asyncio.sleep(random.uniform(0.15, 0.4))
             client = await ensure_connected(phone)
             if not client: return (False, "Disconnected mid-flow")
             r = await client(functions.messages.ReportRequest(
@@ -2551,7 +2701,6 @@ async def _send_groupreport_single(phone, chat_ident, msg_id, reason_api, custom
                 message=craft_report_message(custom_msg, sub_label)))
             if r:
                 mark_proxy_result(proxy, True)
-                add_log(f"✅ GR-M2 OK: {phone[-4:]} (msg {msg_id})")
                 return (True, f"Success (M2: messages.report msg {msg_id})")
             methods_tried.append("M2")
         except errors.FloodWaitError as e:
@@ -2559,9 +2708,9 @@ async def _send_groupreport_single(phone, chat_ident, msg_id, reason_api, custom
         except Exception as e:
             methods_tried.append(f"M2-{type(e).__name__}")
 
-        # M3: prefetch + reportPeer
+        # M3
         try:
-            await asyncio.sleep(random.uniform(0.15, 0.35))
+            await asyncio.sleep(random.uniform(0.15, 0.4))
             client = await ensure_connected(phone)
             if client:
                 try: await client.get_messages(entity, ids=int(msg_id))
@@ -2576,9 +2725,9 @@ async def _send_groupreport_single(phone, chat_ident, msg_id, reason_api, custom
         except Exception as e:
             methods_tried.append(f"M3-{type(e).__name__}")
 
-        # M4: re-resolve + reportPeer
+        # M4
         try:
-            await asyncio.sleep(random.uniform(0.15, 0.35))
+            await asyncio.sleep(random.uniform(0.15, 0.4))
             client = await ensure_connected(phone)
             if client:
                 entity = await resolve_chat_entity(client, chat_ident, link_type)
@@ -2592,7 +2741,7 @@ async def _send_groupreport_single(phone, chat_ident, msg_id, reason_api, custom
         except Exception as e:
             methods_tried.append(f"M4-{type(e).__name__}")
 
-        # M5: reportSpam fallback
+        # M5
         try:
             await asyncio.sleep(random.uniform(0.1, 0.3))
             client = await ensure_connected(phone)
@@ -2623,37 +2772,33 @@ async def gr_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     except ValueError:
         await update.message.reply_text(f"❌ Invalid! Enter 1–{MAX_REPORTS_PER_ACCOUNT}:"); return GR_COUNT
 
+    link_type   = ctx.user_data.get("gr_grp_type", "username")
+    reason_api  = ctx.user_data["gr_api_reason"]
+    custom_msg  = ctx.user_data.get("gr_custom_msg","")
+    cat_lbl     = ctx.user_data["gr_cat_label"]
+    sub_lbl     = ctx.user_data.get("gr_sub_label","—")
+    join_note   = "Public — direct report" if link_type == "username" else "Private — joined first"
     buf: List[Tuple[str, int, str]] = ctx.user_data.get("gr_msg_links_buf", [])
     if not buf:
-        await update.message.reply_text("❌ No message links collected. Start over with /groupreport.")
-        return ConversationHandler.END
-
-    link_type  = ctx.user_data.get("gr_grp_type", "username")
-    reason_api = ctx.user_data["gr_api_reason"]
-    custom_msg = ctx.user_data.get("gr_custom_msg", "")
-    cat_lbl    = ctx.user_data.get("gr_cat_label", "Report")
-    sub_lbl    = ctx.user_data.get("gr_sub_label", "N/A")
-    join_note  = "Public — direct" if link_type == "username" else "Private — joined first"
+        await update.message.reply_text("⚠️ No message links queued!"); return ConversationHandler.END
 
     auth_pairs = []
-    for phone in list(accounts.keys()):
-        c = await ensure_connected(phone)
-        if c:
-            auth_pairs.append((phone, c))
+    for phone, client in accounts.items():
+        try:
+            if await client.is_user_authorized():
+                auth_pairs.append((phone, client))
+        except: pass
     if not auth_pairs:
-        await update.message.reply_text("⚠️ No active accounts at execution time!")
-        return ConversationHandler.END
+        await update.message.reply_text("⚠️ No authorized accounts."); return ConversationHandler.END
 
     total_planned = len(auth_pairs) * count * len(buf)
-    s = _stats_for(uid)
-    s["total"] = total_planned
-    s["start_time"] = datetime.now()
+    s = _stats_for(uid); s["total"] = total_planned; s["start_time"] = datetime.now()
 
-    summary = "\n".join(f"  {i+1}. <code>{ln}</code>" for i, (_, _, ln) in enumerate(buf))
+    summary = "\n".join(f"  • <code>{ln}</code>" for (_,_,ln) in buf)
     await update.message.reply_text(
         f"🚀 <b>GROUP REPORTING STARTED</b>\n\n"
-        f"📊 Total: {total_planned}\n"
-        f"🔗 Anchor msgs: {len(buf)}\n"
+        f"📊 Total: <b>{total_planned}</b>\n"
+        f"🔗 Anchor msgs: <b>{len(buf)}</b>\n"
         f"📱 Accounts: {len(auth_pairs)} × {count}\n"
         f"⚠️ {cat_lbl} → {sub_lbl}\n"
         f"🌐 {join_note}\n"
@@ -2669,9 +2814,13 @@ async def gr_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         for acc_idx, (phone, _) in enumerate(auth_pairs):
             for chat_ident, msg_id, ln in buf:
                 shot_num += 1
-                ok, status = await _send_groupreport_single(
-                    phone, chat_ident, msg_id, reason_api, custom_msg,
-                    link_type, sub_lbl)
+                try:
+                    ok, status = await _send_groupreport_single(
+                        phone, chat_ident, msg_id, reason_api, custom_msg,
+                        link_type, sub_lbl)
+                except Exception as e:
+                    ok, status = (False, f"UnexpectedErr: {type(e).__name__}")
+                    add_log(f"⚠️ Unexpected in gr single: {e}")
                 if ok:
                     total_ok += 1; per_acc_ok[phone] += 1; update_stats(uid, True)
                     log_report_file(phone, f"{chat_ident}/{msg_id}", f"GR-{cat_lbl}/{sub_lbl}", "SUCCESS", status)
@@ -2708,475 +2857,17 @@ async def gr_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🎉 <b>GROUP REPORT COMPLETE</b>\n\n"
-        f"✅ Success: {total_ok}\n"
-        f"❌ Failed: {total_fail}\n"
-        f"📈 Rate: {rate:.1f}%\n"
+        f"✅ Success: <b>{total_ok}</b>\n"
+        f"❌ Failed: <b>{total_fail}</b>\n"
+        f"📈 Rate: <b>{rate:.1f}%</b>\n"
         f"⏱ Time: {elapsed//60}m {elapsed%60}s\n\n"
-        f"Per-account:\n{breakdown}\n\n"
+        f"<b>Per-account:</b>\n{breakdown}\n\n"
         f"⚠️ {cat_lbl} → {sub_lbl}",
         parse_mode="HTML")
     return ConversationHandler.END
 
 # ══════════════════════════════════════════════════════════════════════
-# 🎯 R2 ACCOUNT REPORTER (/r2report) — official 3-dot tree + screenshot
-# ══════════════════════════════════════════════════════════════════════
-async def _download_profile_photo_bytes(client, entity) -> Optional[bytes]:
-    """Download the target's current profile photo as bytes (the 'screenshot')."""
-    try:
-        photo = await client.download_profile_photo(entity, file=bytes)
-        if photo:
-            return photo
-    except Exception as e:
-        add_log(f"⚠️ PFP download fail: {type(e).__name__}")
-    return None
-
-async def r2report_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    if not is_authorized(update.effective_user.id): return ConversationHandler.END
-    if not accounts:
-        await update.message.reply_text("⚠️ No accounts! Use /addaccount."); return ConversationHandler.END
-    active = await count_active()
-    if active == 0:
-        await update.message.reply_text("⚠️ No active accounts!"); return ConversationHandler.END
-    ctx.user_data.clear()
-    await update.message.reply_text(
-        f"🎯 <b>R2 ACCOUNT REPORTER</b>\n━━━━━━━━━━━━━━━━\n\n"
-        f"Official 3-dot <b>Report</b> flow (11 categories + sub-options).\n"
-        f"✅ Active: {active}/{len(accounts)}\n\n"
-        f"👤 Enter target <b>@username</b> or user ID:\n/cancel to abort.",
-        parse_mode="HTML")
-    return R2_USER
-
-async def r2_receive_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    raw = update.message.text.strip()
-    add_log(f"🎯 R2 target: {raw}")
-    wait_msg = await update.message.reply_text("🔍 Resolving account...")
-    client = await get_any_active_client()
-    if not client:
-        await wait_msg.edit_text("❌ No active accounts."); return ConversationHandler.END
-    try:
-        identifier = raw.lstrip("@")
-        entity     = await client.get_entity(int(identifier) if identifier.isdigit() else identifier)
-    except errors.UsernameNotOccupiedError:
-        await wait_msg.edit_text("❌ Username not found. Try again:"); return R2_USER
-    except ValueError:
-        await wait_msg.edit_text("❌ Invalid format. Try @username or numeric ID:"); return R2_USER
-    except Exception as e:
-        await wait_msg.edit_text(f"❌ Error: {str(e)[:60]}\nTry again:"); return R2_USER
-
-    uid   = entity.id
-    fname = getattr(entity, "first_name", "") or ""
-    lname = getattr(entity, "last_name", "")  or ""
-    uname = getattr(entity, "username", "")   or ""
-    dname = f"{fname} {lname}".strip() or uname or str(uid)
-    is_bot = getattr(entity, "bot", False)
-
-    ctx.user_data.update({"r2_uid": uid, "r2_name": dname, "r2_uname": uname,
-                          "r2_entity_id": raw, "r2_is_bot": is_bot})
-
-    # fetch profile photo bytes (the screenshot)
-    pfp_bytes = await _download_profile_photo_bytes(client, entity)
-
-    try:
-        await wait_msg.delete()
-    except Exception:
-        pass
-
-    caption = (
-        f"🎯 <b>TARGET LOCKED — R2 Account Reporter</b>\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"👤 <b>{dname}</b>" + (f" (@{uname})" if uname else "") +
-        f"\n🆔 <code>{uid}</code>\n"
-        f"🤖 Bot: {'Yes' if is_bot else 'No'}\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"📋 <b>Select report reason</b> (same as official 3-dot menu):"
-    )
-    if pfp_bytes:
-        try:
-            await update.message.reply_photo(
-                photo=pfp_bytes, caption=caption, parse_mode="HTML",
-                reply_markup=_build_full_cat_keyboard("R2CAT"))
-            return R2_CAT
-        except Exception as e:
-            add_log(f"⚠️ R2 photo send fail: {type(e).__name__}")
-
-    await update.message.reply_text(
-        caption + "\n\n<i>(No profile photo available)</i>",
-        parse_mode="HTML",
-        reply_markup=_build_full_cat_keyboard("R2CAT"))
-    return R2_CAT
-
-async def r2_category_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    parts = query.data.split("|")
-    if len(parts) < 2:
-        return R2_CAT
-    cat_key = parts[1]
-    cat = FULL_REPORT_CATEGORIES.get(cat_key)
-    if not cat:
-        return R2_CAT
-    ctx.user_data.update({"r2_cat_key": cat_key, "r2_cat_label": f"{cat['emoji']} {cat['label']}",
-                          "r2_api_reason": cat["api"]})
-    dname = ctx.user_data.get("r2_name", "Target")
-    if not cat["subs"]:
-        # direct categories: dontlike / copyright / other / not_illegal → only optional msg
-        ctx.user_data["r2_sub_label"] = "N/A"
-        add_log(f"📥 R2 Category: {cat['label']}")
-        await query.edit_message_caption(
-            caption=f"✅ {cat['emoji']} <b>{cat['label']}</b>\n👤 {dname}\n\n"
-                    f"📝 Optional message or send <code>skip</code>:",
-            parse_mode="HTML") if query.message.photo else await query.edit_message_text(
-            f"✅ {cat['emoji']} <b>{cat['label']}</b>\n👤 {dname}\n\n"
-            f"📝 Optional message or send <code>skip</code>:",
-            parse_mode="HTML")
-        return R2_MSG
-    # has subs
-    if query.message.photo:
-        await query.edit_message_caption(
-            caption=f"✅ {cat['emoji']} <b>{cat['label']}</b>\n👤 {dname}\n\n📋 Select sub-option:",
-            parse_mode="HTML", reply_markup=_build_sub_keyboard(cat_key, "R2SUB"))
-    else:
-        await query.edit_message_text(
-            f"✅ {cat['emoji']} <b>{cat['label']}</b>\n👤 {dname}\n\n📋 Select sub-option:",
-            parse_mode="HTML", reply_markup=_build_sub_keyboard(cat_key, "R2SUB"))
-    return R2_SUB
-
-async def r2_subcategory_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    parts = query.data.split("|")
-    if len(parts) >= 2 and parts[1] == "back":
-        kb = _build_full_cat_keyboard("R2CAT")
-        dname = ctx.user_data.get("r2_name", "Target")
-        if query.message.photo:
-            await query.edit_message_caption(
-                caption=f"🎯 <b>{dname}</b>\n\n📋 Select report reason:",
-                parse_mode="HTML", reply_markup=kb)
-        else:
-            await query.edit_message_text(
-                f"🎯 <b>{dname}</b>\n\n📋 Select report reason:",
-                parse_mode="HTML", reply_markup=kb)
-        return R2_CAT
-    if len(parts) < 3:
-        return R2_SUB
-    _, cat_key, sub_key = parts[0], parts[1], parts[2]
-    cat = FULL_REPORT_CATEGORIES.get(cat_key)
-    if not cat:
-        return R2_SUB
-    sub_label = next((lbl for sk, lbl in cat["subs"] if sk == sub_key), sub_key)
-    ctx.user_data.update({"r2_sub_label": sub_label})
-    add_log(f"📥 R2 Category: {cat['label']} → {sub_label}")
-    text = (f"✅ {cat['emoji']} <b>{cat['label']}</b> → <b>{sub_label}</b>\n\n"
-            f"📝 Optional message or send <code>skip</code>:")
-    if query.message.photo:
-        await query.edit_message_caption(caption=text, parse_mode="HTML")
-    else:
-        await query.edit_message_text(text, parse_mode="HTML")
-    return R2_MSG
-
-async def r2_receive_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    if text.lower() in ("skip", "/skip"): text = ""
-    ctx.user_data["r2_custom_msg"] = text
-    await update.message.reply_text(
-        f"✅ Saved!\n🔢 Reports per account (1–{MAX_REPORTS_PER_ACCOUNT}):",
-        parse_mode="HTML")
-    return R2_COUNT
-
-async def _send_r2_account_report(phone, user_entity, reason_api, custom_msg,
-                                   sub_label) -> Tuple[bool, str]:
-    """Account-level report (whole account) — multi-method, fast, human-like."""
-    client = await ensure_connected(phone)
-    if not client:
-        return (False, "Account disconnected / unauthorized")
-    proxy = account_proxy_map.get(phone)
-    methods_tried = []
-
-    # M1 — account.reportPeer (whole account)
-    try:
-        await asyncio.sleep(random.uniform(0.1, 0.3))
-        r = await client(functions.account.ReportPeerRequest(
-            peer=user_entity, reason=reason_api,
-            message=craft_report_message(custom_msg, sub_label)))
-        if r:
-            mark_proxy_result(proxy, True)
-            add_log(f"✅ R2-M1 OK: {phone[-4:]}")
-            return (True, "Success (M1: account.reportPeer)")
-        methods_tried.append("M1")
-    except errors.FloodWaitError as e:
-        return (False, f"FloodWait {e.seconds}s")
-    except (ConnectionError, OSError):
-        client = await ensure_connected(phone)
-        if not client:
-            return (False, "Reconnect failed")
-    except Exception as e:
-        methods_tried.append(f"M1-{type(e).__name__}")
-
-    # M2 — re-resolve + reportPeer
-    try:
-        await asyncio.sleep(random.uniform(0.15, 0.35))
-        client = await ensure_connected(phone)
-        if client:
-            ent = await client.get_entity(user_entity)
-            r = await client(functions.account.ReportPeerRequest(
-                peer=ent, reason=reason_api,
-                message=craft_report_message(custom_msg, sub_label)))
-            if r:
-                mark_proxy_result(proxy, True)
-                add_log(f"✅ R2-M2 OK: {phone[-4:]}")
-                return (True, "Success (M2: re-resolve+reportPeer)")
-            methods_tried.append("M2")
-    except errors.FloodWaitError as e:
-        return (False, f"FloodWait {e.seconds}s")
-    except Exception as e:
-        methods_tried.append(f"M2-{type(e).__name__}")
-
-    # M3 — report latest message of the account (anchors the report)
-    try:
-        await asyncio.sleep(random.uniform(0.15, 0.35))
-        client = await ensure_connected(phone)
-        if client:
-            msgs = await client.get_messages(user_entity, limit=1)
-            if msgs and msgs[0]:
-                r = await client(functions.messages.ReportRequest(
-                    peer=user_entity, id=[msgs[0].id], reason=reason_api,
-                    message=craft_report_message(custom_msg, sub_label)))
-                if r:
-                    mark_proxy_result(proxy, True)
-                    add_log(f"✅ R2-M3 OK: {phone[-4:]}")
-                    return (True, "Success (M3: report latest msg)")
-            methods_tried.append("M3")
-    except errors.FloodWaitError as e:
-        return (False, f"FloodWait {e.seconds}s")
-    except Exception as e:
-        methods_tried.append(f"M3-{type(e).__name__}")
-
-    # M4 — ReportSpam fallback
-    try:
-        await asyncio.sleep(random.uniform(0.1, 0.3))
-        client = await ensure_connected(phone)
-        if client:
-            r = await client(functions.messages.ReportSpamRequest(peer=user_entity))
-            if r:
-                mark_proxy_result(proxy, True)
-                add_log(f"✅ R2-M4 OK: {phone[-4:]}")
-                return (True, "Success (M4: ReportSpam fallback)")
-            methods_tried.append("M4")
-    except Exception as e:
-        methods_tried.append(f"M4-{type(e).__name__}")
-
-    mark_proxy_result(proxy, False)
-    return (False, f"All failed ({','.join(methods_tried)})")
-
-async def r2_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    uid = update.effective_user.id
-    try:
-        count = int(update.message.text.strip())
-        if not 1 <= count <= MAX_REPORTS_PER_ACCOUNT: raise ValueError
-    except ValueError:
-        await update.message.reply_text(f"❌ Invalid! Enter 1–{MAX_REPORTS_PER_ACCOUNT}:"); return R2_COUNT
-
-    target_raw   = ctx.user_data["r2_entity_id"]
-    target_name  = ctx.user_data.get("r2_name", target_raw)
-    reason_label = ctx.user_data.get("r2_cat_label", "Report")
-    sub_label    = ctx.user_data.get("r2_sub_label", "N/A")
-    reason_api   = ctx.user_data["r2_api_reason"]
-    custom_msg   = ctx.user_data.get("r2_custom_msg", "")
-
-    auth_pairs = []
-    for phone in list(accounts.keys()):
-        c = await ensure_connected(phone)
-        if c:
-            auth_pairs.append((phone, c))
-    if not auth_pairs:
-        await update.message.reply_text("⚠️ No active accounts at execution time!")
-        return ConversationHandler.END
-
-    total = len(auth_pairs) * count
-    s = _stats_for(uid)
-    s["total"] = total
-    s["start_time"] = datetime.now()
-
-    await update.message.reply_text(
-        f"🚀 <b>R2 ACCOUNT REPORT — STARTED</b>\n"
-        f"👤 {target_name}\n⚠️ {reason_label} → {sub_label}\n"
-        f"📊 {total} total ({len(auth_pairs)} accounts × {count})\n━━━━━━━━━━━━━━━━",
-        parse_mode="HTML")
-
-    # resolve target per account once
-    resolved: Dict[str, object] = {}
-    for phone, client in auth_pairs:
-        try:
-            identifier = target_raw.lstrip("@")
-            ent = await client.get_entity(int(identifier) if identifier.isdigit() else identifier)
-            resolved[phone] = ent
-        except Exception as e:
-            await update.message.reply_text(f"❌ <code>{phone[-4:]}</code>: Resolve — {str(e)[:40]}", parse_mode="HTML")
-            resolved[phone] = None
-
-    total_ok = total_fail = 0
-    per_acc_ok: Dict[str, int]   = {p: 0 for p, _ in auth_pairs}
-    per_acc_fail: Dict[str, int] = {p: 0 for p, _ in auth_pairs}
-    shot_num = 0
-
-    for r in range(count):
-        for acc_idx, (phone, _) in enumerate(auth_pairs):
-            shot_num += 1
-            ent = resolved.get(phone)
-            if ent is None:
-                total_fail += 1; per_acc_fail[phone] += 1
-                await update.message.reply_text(
-                    f"❌ R2 {shot_num}/{total} | R{r+1} | <code>{phone[-4:]}</code> → resolve failed",
-                    parse_mode="HTML")
-                continue
-            ok, status = await _send_r2_account_report(phone, ent, reason_api, custom_msg, sub_label)
-            if ok:
-                total_ok += 1; per_acc_ok[phone] += 1; update_stats(uid, True)
-                log_report_file(phone, target_raw, f"R2-{reason_label}/{sub_label}", "SUCCESS", status)
-                await update.message.reply_text(
-                    f"✅ R2 {shot_num}/{total} | R{r+1} | 📱 <code>{phone[-4:]}</code> → {status}",
-                    parse_mode="HTML")
-            else:
-                total_fail += 1; per_acc_fail[phone] += 1; update_stats(uid, False)
-                log_report_file(phone, target_raw, f"R2-{reason_label}/{sub_label}", "FAILED", status)
-                await update.message.reply_text(
-                    f"❌ R2 {shot_num}/{total} | R{r+1} | 📱 <code>{phone[-4:]}</code> → {status}",
-                    parse_mode="HTML")
-                if "FloodWait" in status:
-                    try:
-                        wait = int(status.split()[1].replace("s",""))
-                        await update.message.reply_text(f"⏳ FloodWait {wait}s — waiting...")
-                        await asyncio.sleep(min(wait + 2, 300))
-                    except: await asyncio.sleep(60)
-            if acc_idx < len(auth_pairs) - 1:
-                await asyncio.sleep(round_robin_delay())
-        if r < count - 1:
-            await asyncio.sleep(account_switch_delay())
-
-    elapsed = (datetime.now() - s["start_time"]).seconds if s["start_time"] else 0
-    rate = (total_ok / total) * 100 if total > 0 else 0
-    add_log(f"🎉 R2 done: {total_ok}/{total} ({rate:.1f}%)")
-    breakdown = "\n".join(
-        f"  📱 <code>{p[-4:]}</code> → ✅ {per_acc_ok[p]} | ❌ {per_acc_fail[p]}"
-        for p, _ in auth_pairs)
-    await update.message.reply_text(
-        f"━━━━━━━━━━━━━━━━\n🎉 <b>R2 ACCOUNT REPORT COMPLETE</b>\n\n"
-        f"👤 {target_name}\n⚠️ {reason_label} → {sub_label}\n"
-        f"✅ {total_ok} | ❌ {total_fail} | 📈 {rate:.1f}%\n"
-        f"⏱ Time: {elapsed//60}m {elapsed%60}s\n\n"
-        f"Per-account:\n{breakdown}",
-        parse_mode="HTML")
-    return ConversationHandler.END
-
-# ══════════════════════════════════════════════════════════════════════
-# 📡 PING BOT (/pingbot) — animated stats + all accounts ping target chat
-# ══════════════════════════════════════════════════════════════════════
-PING_MESSAGES = [
-    "📡 Ping! Reporter network online ✅",
-    "📡 Ping — node active and reporting-ready ⚡",
-    "📡 pong 🏓 system healthy",
-    "📡 Ping check — all systems nominal 🟢",
-    "📡 Ping! Standing by for duty 🫡",
-]
-
-async def pingbot_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id): return
-
-    # ── Phase 1: animated pinging ──
-    frames = [
-        "📡 <b>PINGING NETWORK...</b>\n\n▱▱▱▱▱▱▱▱▱▱  0%",
-        "📡 <b>PINGING NETWORK...</b>\n\n▰▰▰▱▱▱▱▱▱▱  30%\n\n🌐 Checking MTProto link...",
-        "📡 <b>PINGING NETWORK...</b>\n\n▰▰▰▰▰▰▱▱▱▱  60%\n\n🔐 Verifying sessions...",
-        "📡 <b>PINGING NETWORK...</b>\n\n▰▰▰▰▰▰▰▰▰▱  90%\n\n📊 Collecting stats...",
-    ]
-    t0 = time.time()
-    msg = await update.message.reply_text(frames[0], parse_mode="HTML")
-    for f in frames[1:]:
-        await asyncio.sleep(0.35)
-        try: await msg.edit_text(f, parse_mode="HTML")
-        except Exception: pass
-
-    # measure real latency via an active client
-    latency_ms = None
-    probe = await get_any_active_client()
-    if probe:
-        try:
-            pt = time.time()
-            await probe.get_me()
-            latency_ms = int((time.time() - pt) * 1000)
-        except Exception:
-            pass
-    total_ms = int((time.time() - t0) * 1000)
-
-    active = await count_active()
-    uptime_s = int(time.time() - BOT_START_TIME)
-    up = f"{uptime_s//3600}h {(uptime_s%3600)//60}m {uptime_s%60}s"
-
-    stats_text = (
-        f"📡 <b>PONG! — BOT STATUS</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚡ Version   : v{BOT_VERSION}\n"
-        f"🏓 Latency   : {latency_ms if latency_ms is not None else 'N/A'} ms\n"
-        f"⏱ Scan time : {total_ms} ms\n"
-        f"🕐 Uptime    : {up}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📱 Accounts  : {len(accounts)} total | 🟢 {active} active\n"
-        f"📧 Gmails    : {len(GMAIL_ACCOUNTS)}\n"
-        f"🔑 Sudo      : {len(sudo_users)}\n"
-        f"🌐 Proxy     : {'🟢 ON' if PROXY_ENABLED else '⚡ OFF (direct)'} | pool {len(PROXY_LIST)}\n"
-        f"🗄️ MongoDB   : {'🟢 connected' if db is not None else '🔴 offline'}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 Ping target: <code>{PING_CHAT_ID}</code>"
-    )
-    try:
-        await msg.edit_text(stats_text, parse_mode="HTML")
-    except Exception:
-        pass
-
-    # ── Phase 2: ping all accounts → target chat ──
-    await asyncio.sleep(1.2)
-    ping_msg = await update.message.reply_text(
-        "📡 <b>NOW PINGING ALL ACCOUNTS...</b>\n\n"
-        f"Target chat: <code>{PING_CHAT_ID}</code>\n"
-        f"⏳ Firing from {active} active account(s)...",
-        parse_mode="HTML")
-
-    ok_n = fail_n = 0
-    lines = []
-    for phone in list(accounts.keys()):
-        client = await ensure_connected(phone)
-        if not client:
-            fail_n += 1
-            lines.append(f"❌ <code>{phone[-4:]}</code> → offline/unauthorized")
-            continue
-        try:
-            ping_text = random.choice(PING_MESSAGES)
-            await client.send_message(PING_CHAT_ID, ping_text)
-            ok_n += 1
-            lines.append(f"✅ <code>{phone[-4:]}</code> → ping sent")
-            add_log(f"📡 Ping OK: {phone[-4:]} → {PING_CHAT_ID}")
-        except errors.FloodWaitError as e:
-            fail_n += 1
-            lines.append(f"⏳ <code>{phone[-4:]}</code> → FloodWait {e.seconds}s")
-        except Exception as e:
-            fail_n += 1
-            lines.append(f"❌ <code>{phone[-4:]}</code> → {type(e).__name__}: {str(e)[:40]}")
-            add_log(f"⚠️ Ping fail {phone[-4:]}: {type(e).__name__}")
-        await asyncio.sleep(random.uniform(0.4, 1.0))
-
-    result = (
-        f"📡 <b>PING COMPLETE</b>\n\n"
-        f"✅ Sent: {ok_n}\n"
-        f"❌ Failed: {fail_n}\n"
-        f"🎯 Target: <code>{PING_CHAT_ID}</code>\n\n"
-        + "\n".join(lines)
-    )
-    if len(result) > 4000:
-        result = result[:3990] + "\n...(truncated)"
-    await ping_msg.edit_text(result, parse_mode="HTML")
-
-# ══════════════════════════════════════════════════════════════════════
-# 📸 PFP REPORT FLOW
+# 📸 PFP REPORT FLOW  (/accountreport)
 # ══════════════════════════════════════════════════════════════════════
 async def accountreport_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not is_authorized(update.effective_user.id): return ConversationHandler.END
@@ -3263,27 +2954,22 @@ async def ar_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         if not 1 <= count <= MAX_REPORTS_PER_ACCOUNT: raise ValueError
     except ValueError:
         await update.message.reply_text(f"❌ Invalid! Enter 1–{MAX_REPORTS_PER_ACCOUNT}:"); return AR_COUNT
-
     target_raw    = ctx.user_data["ar_entity_id"]
     target_name   = ctx.user_data.get("ar_name", target_raw)
     reason_label  = ctx.user_data["ar_reason_label"]
     reason_api    = ctx.user_data["ar_reason_api"]
-    custom_msg    = ctx.user_data.get("ar_custom_msg", "")
+    custom_msg    = ctx.user_data.get("ar_custom_msg","")
 
     auth_pairs = []
-    for phone in list(accounts.keys()):
-        c = await ensure_connected(phone)
-        if c:
-            auth_pairs.append((phone, c))
+    for phone, client in accounts.items():
+        try:
+            if await client.is_user_authorized():
+                auth_pairs.append((phone, client))
+        except: pass
     if not auth_pairs:
-        await update.message.reply_text("⚠️ No active accounts at execution time!")
-        return ConversationHandler.END
+        await update.message.reply_text("⚠️ No authorized accounts."); return ConversationHandler.END
 
     total_reports = len(auth_pairs) * count
-    s = _stats_for(uid)
-    s["total"] = total_reports
-    s["start_time"] = datetime.now()
-
     await update.message.reply_text(
         f"🚀 <b>NUCLEAR PFP REPORT</b>\n👤 {target_name}\n⚠️ {reason_label}\n"
         f"📊 {total_reports} total ({len(auth_pairs)} × {count})\n━━━━━━━━━━━━━━━━",
@@ -3316,7 +3002,10 @@ async def ar_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                     f"❌ PFP {shot_num}/{total_reports} | R{r+1} | <code>{phone[-4:]}</code> → resolve failed",
                     parse_mode="HTML")
                 continue
-            ok, status = await report_profile_photo_nuclear(phone, ent, photos, reason_api, custom_msg)
+            try:
+                ok, status = await report_profile_photo_nuclear(phone, ent, photos, reason_api, custom_msg)
+            except Exception as e:
+                ok, status = (False, f"UnexpectedErr: {type(e).__name__}")
             if ok:
                 total_ok += 1; per_acc_ok[phone] += 1
                 log_report_file(phone, target_raw, f"PFP-{reason_label}", "SUCCESS", status)
@@ -3348,12 +3037,274 @@ async def ar_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         f"━━━━━━━━━━━━━━━━\n🎉 <b>PFP COMPLETE</b>\n\n"
         f"👤 {target_name}\n⚠️ {reason_label}\n"
         f"✅ {total_ok} | ❌ {total_fail} | 📈 {rate:.1f}%\n\n"
-        f"Per-account:\n{breakdown}",
+        f"<b>Per-account:</b>\n{breakdown}",
         parse_mode="HTML")
     return ConversationHandler.END
 
 # ══════════════════════════════════════════════════════════════════════
-# 🤖 BOT REPORT FLOW
+# 🆕 R2 ACCOUNT REPORTER FLOW  (/r2report)
+# username → optional screenshot → full 3-dot report tree → round-robin fire
+# ══════════════════════════════════════════════════════════════════════
+async def r2report_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    if not is_authorized(update.effective_user.id): return ConversationHandler.END
+    if not accounts:
+        await update.message.reply_text("⚠️ No accounts! Use /addaccount."); return ConversationHandler.END
+    active = await count_active()
+    if active == 0:
+        await update.message.reply_text("⚠️ No active accounts!"); return ConversationHandler.END
+    ctx.user_data.clear()
+    await update.message.reply_text(
+        f"🆕 <b>R2 ACCOUNT REPORTER</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"3-dot menu → <b>Report Account</b> style.\n"
+        f"Uses full Telegram report category tree.\n\n"
+        f"✅ Active: {active}/{len(accounts)}\n\n"
+        f"👤 <b>Step 1/5</b> — Enter <b>@username</b> or user ID:\n"
+        f"/cancel to abort.",
+        parse_mode="HTML")
+    return R2_USER
+
+async def r2_receive_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    raw = update.message.text.strip()
+    add_log(f"🆕 R2 target: {raw}")
+    wait_msg = await update.message.reply_text("🔍 Resolving user...")
+    client = await get_any_active_client()
+    if not client:
+        await wait_msg.edit_text("❌ No active accounts."); return ConversationHandler.END
+    try:
+        identifier = raw.lstrip("@")
+        entity = await client.get_entity(int(identifier) if identifier.isdigit() else identifier)
+    except errors.UsernameNotOccupiedError:
+        await wait_msg.edit_text("❌ Username not found. Try again:"); return R2_USER
+    except ValueError:
+        await wait_msg.edit_text("❌ Invalid format. Try @username or numeric ID:"); return R2_USER
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ Error: {str(e)[:60]}\nTry again:"); return R2_USER
+
+    uid_r   = entity.id
+    fname = getattr(entity, "first_name", "") or ""
+    lname = getattr(entity, "last_name", "")  or ""
+    uname = getattr(entity, "username", "")   or ""
+    dname = f"{fname} {lname}".strip() or uname or str(uid_r)
+
+    ctx.user_data.update({
+        "r2_uid": uid_r, "r2_name": dname, "r2_uname": uname, "r2_entity_id": raw,
+        "r2_screenshot": None, "r2_shot_name": None,
+    })
+    await wait_msg.edit_text(
+        f"✅ Found!\n👤 <b>{dname}</b>" + (f" (@{uname})" if uname else "") +
+        f"\n🆔 <code>{uid_r}</code>\n\n"
+        f"📸 <b>Step 2/5</b> — Optional: send a <b>screenshot</b> of the target account\n"
+        f"(will be logged as evidence).\n\n"
+        f"OR send <code>/skip</code> to continue without.",
+        parse_mode="HTML")
+    return R2_SHOT
+
+async def r2_receive_shot(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        photo = update.message.photo[-1]
+        file  = await photo.get_file()
+        data  = await file.download_as_bytearray()
+        ctx.user_data["r2_screenshot"] = bytes(data)
+        ctx.user_data["r2_shot_name"]  = f"r2_shot_{int(time.time())}.jpg"
+        add_log(f"📸 R2 screenshot saved ({len(data)} bytes)")
+        await update.message.reply_text(
+            f"✅ Screenshot saved!\n\n"
+            f"📋 <b>Step 3/5</b> — Select report reason:",
+            reply_markup=_build_full_cat_keyboard("R2CAT"),
+            parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not save screenshot: {e}")
+        return R2_SHOT
+    return R2_CAT
+
+async def r2_skip_shot(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    ctx.user_data["r2_screenshot"] = None
+    await update.message.reply_text(
+        f"⏩ Skipped.\n\n"
+        f"📋 <b>Step 3/5</b> — Select report reason:",
+        reply_markup=_build_full_cat_keyboard("R2CAT"),
+        parse_mode="HTML")
+    return R2_CAT
+
+async def r2_category_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split("|")
+    if len(parts) < 2: return R2_CAT
+    cat_key = parts[1]
+    if cat_key == "back":
+        await query.edit_message_text(
+            "📋 Select report reason:",
+            reply_markup=_build_full_cat_keyboard("R2CAT"))
+        return R2_CAT
+    if cat_key not in FULL_REPORT_CATEGORIES:
+        return R2_CAT
+    cat = FULL_REPORT_CATEGORIES[cat_key]
+    ctx.user_data.update({
+        "r2_cat_key": cat_key,
+        "r2_cat_label": f"{cat['emoji']} {cat['label']}",
+        "r2_reason_api": cat["api"],
+    })
+    if not cat["subs"]:
+        ctx.user_data["r2_sub_label"] = "—"
+        if cat_key == "dontlike":
+            ctx.user_data["r2_custom_msg"] = ""
+            await query.edit_message_text(
+                f"✅ {cat['emoji']} {cat['label']}\n\n"
+                f"🔢 <b>Step 5/5</b> — Reports per account (1–{MAX_REPORTS_PER_ACCOUNT}):",
+                parse_mode="HTML")
+            return R2_COUNT
+        await query.edit_message_text(
+            f"✅ {cat['emoji']} {cat['label']}\n\n"
+            f"📝 <b>Step 4b/5</b> — Optional message or send <code>skip</code>:",
+            parse_mode="HTML")
+        return R2_MSG
+    await query.edit_message_text(
+        f"✅ {cat['emoji']} {cat['label']}\n\n"
+        f"📋 <b>Step 4/5</b> — Select sub-category:",
+        reply_markup=_build_sub_keyboard(cat_key, "R2SUB"),
+        parse_mode="HTML")
+    return R2_SUB
+
+async def r2_subcategory_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split("|")
+    if len(parts) >= 2 and parts[1] == "back":
+        await query.edit_message_text("📋 Select report reason:",
+            reply_markup=_build_full_cat_keyboard("R2CAT"))
+        return R2_CAT
+    if len(parts) < 3: return R2_SUB
+    cat_key, sub_key = parts[1], parts[2]
+    cat = FULL_REPORT_CATEGORIES.get(cat_key)
+    if not cat or not cat["subs"]: return R2_SUB
+    sub_label = next((lbl for k, lbl in cat["subs"] if k == sub_key), "—")
+    ctx.user_data["r2_sub_label"] = sub_label
+    await query.edit_message_text(
+        f"✅ {cat['emoji']} {cat['label']} → <b>{sub_label}</b>\n\n"
+        f"📝 <b>Step 4b/5</b> — Optional message or send <code>skip</code>:",
+        parse_mode="HTML")
+    return R2_MSG
+
+async def r2_receive_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    if text.lower() in ("skip", "/skip"): text = ""
+    ctx.user_data["r2_custom_msg"] = text
+    await update.message.reply_text(
+        f"✅ Saved!\n\n🔢 <b>Step 5/5</b> — Reports per account?\n\n"
+        f"💡 1–2 = ✅ Safe | 3–10 = ⚠️ Moderate | 10+ = 🚨 Aggressive\n\n"
+        f"Enter 1–{MAX_REPORTS_PER_ACCOUNT}:", parse_mode="HTML")
+    return R2_COUNT
+
+async def r2_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    uid = update.effective_user.id
+    try:
+        count = int(update.message.text.strip())
+        if not 1 <= count <= MAX_REPORTS_PER_ACCOUNT: raise ValueError
+    except ValueError:
+        await update.message.reply_text(f"❌ Invalid! Enter 1–{MAX_REPORTS_PER_ACCOUNT}:"); return R2_COUNT
+
+    target_raw   = ctx.user_data["r2_entity_id"]
+    target_name  = ctx.user_data["r2_name"]
+    cat_label    = ctx.user_data["r2_cat_label"]
+    sub_label    = ctx.user_data.get("r2_sub_label", "—")
+    reason_api   = ctx.user_data["r2_reason_api"]
+    custom_msg   = ctx.user_data.get("r2_custom_msg", "")
+    screenshot   = ctx.user_data.get("r2_screenshot")
+
+    auth_pairs = []
+    for phone, client in accounts.items():
+        try:
+            if await client.is_user_authorized():
+                auth_pairs.append((phone, client))
+        except: pass
+    if not auth_pairs:
+        await update.message.reply_text("⚠️ No authorized accounts."); return ConversationHandler.END
+
+    total = len(auth_pairs) * count
+    s = _stats_for(uid); s["total"] = total; s["start_time"] = datetime.now()
+
+    shot_note = "📸 Screenshot: attached ✅" if screenshot else "📸 Screenshot: none"
+    await update.message.reply_text(
+        f"🚀 <b>R2 ACCOUNT REPORT STARTING</b>\n"
+        f"👤 {target_name}\n"
+        f"⚠️ {cat_label} → {sub_label}\n"
+        f"{shot_note}\n"
+        f"📊 {total} total ({len(auth_pairs)} × {count})\n"
+        f"🔁 Round-robin: acc1→acc2→...→accN→acc1→...\n"
+        f"━━━━━━━━━━━━━━━━",
+        parse_mode="HTML")
+
+    # Pre-resolve target per account
+    resolved: Dict[str, object] = {}
+    for phone, client in auth_pairs:
+        try:
+            identifier = target_raw.lstrip("@")
+            ent = await client.get_entity(int(identifier) if identifier.isdigit() else identifier)
+            resolved[phone] = ent
+        except Exception as e:
+            await update.message.reply_text(f"❌ <code>{phone[-4:]}</code>: Resolve — {str(e)[:40]}", parse_mode="HTML")
+            resolved[phone] = None
+
+    total_ok = total_fail = 0
+    per_acc_ok: Dict[str, int]   = {p: 0 for p, _ in auth_pairs}
+    per_acc_fail: Dict[str, int] = {p: 0 for p, _ in auth_pairs}
+    shot_num = 0
+    for r in range(count):
+        for acc_idx, (phone, _) in enumerate(auth_pairs):
+            shot_num += 1
+            user_entity = resolved.get(phone)
+            if user_entity is None:
+                total_fail += 1; per_acc_fail[phone] += 1
+                await update.message.reply_text(
+                    f"❌ R2 {shot_num}/{total} | R{r+1} | <code>{phone[-4:]}</code> → resolve failed",
+                    parse_mode="HTML")
+                continue
+            try:
+                ok, status = await r2_report_account(phone, user_entity, reason_api, custom_msg, sub_label)
+            except Exception as e:
+                ok, status = (False, f"UnexpectedErr: {type(e).__name__}")
+                add_log(f"⚠️ Unexpected in r2_report_account: {e}")
+
+            if ok:
+                total_ok += 1; per_acc_ok[phone] += 1; update_stats(uid, True)
+                log_report_file(phone, target_raw, f"R2-{cat_label}/{sub_label}", "SUCCESS", status)
+                await update.message.reply_text(
+                    f"✅ R2 {shot_num}/{total} | R{r+1} | 📱 <code>{phone[-4:]}</code> → {status}",
+                    parse_mode="HTML")
+            else:
+                total_fail += 1; per_acc_fail[phone] += 1; update_stats(uid, False)
+                log_report_file(phone, target_raw, f"R2-{cat_label}/{sub_label}", "FAILED", status)
+                await update.message.reply_text(
+                    f"❌ R2 {shot_num}/{total} | R{r+1} | 📱 <code>{phone[-4:]}</code> → {status}",
+                    parse_mode="HTML")
+                if "FloodWait" in status:
+                    try:
+                        wait = int(status.split()[1].replace("s",""))
+                        await asyncio.sleep(min(wait + 2, 300))
+                    except: await asyncio.sleep(60)
+            if acc_idx < len(auth_pairs) - 1:
+                await asyncio.sleep(r2_switch_delay())
+        if r < count - 1:
+            await asyncio.sleep(account_switch_delay())
+
+    elapsed = (datetime.now() - s["start_time"]).seconds if s["start_time"] else 0
+    rate = (total_ok / total) * 100 if total > 0 else 0
+    breakdown = "\n".join(
+        f"  📱 <code>{p[-4:]}</code> → ✅ {per_acc_ok[p]} | ❌ {per_acc_fail[p]}"
+        for p, _ in auth_pairs)
+    await update.message.reply_text(
+        f"━━━━━━━━━━━━━━━━\n🎉 <b>R2 ACCOUNT REPORT COMPLETE</b>\n\n"
+        f"👤 {target_name}\n⚠️ {cat_label} → {sub_label}\n"
+        f"✅ {total_ok} | ❌ {total_fail} | 📈 {rate:.1f}%\n"
+        f"⏱ Time: {elapsed//60}m {elapsed%60}s\n\n"
+        f"<b>Per-account:</b>\n{breakdown}",
+        parse_mode="HTML")
+    return ConversationHandler.END
+
+# ══════════════════════════════════════════════════════════════════════
+# 🤖 BOT REPORT FLOW  (/botreport)
 # ══════════════════════════════════════════════════════════════════════
 async def botreport_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not is_authorized(update.effective_user.id): return ConversationHandler.END
@@ -3387,17 +3338,17 @@ async def br_receive_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
 
     is_bot = getattr(entity, "bot", False)
     if not is_bot:
-        await wait_msg.edit_text("⚠️ Not a bot. Use /r2report or /accountreport for users.")
+        await wait_msg.edit_text("⚠️ Not a bot. Use /accountreport for users.")
         return ConversationHandler.END
 
-    uid   = entity.id
+    uid_b = entity.id
     fname = getattr(entity, "first_name", "") or ""
     uname = getattr(entity, "username", "")   or ""
-    dname = fname or uname or str(uid)
-    ctx.user_data.update({"br_uid": uid, "br_name": dname, "br_uname": uname, "br_entity_id": raw})
+    dname = fname or uname or str(uid_b)
+    ctx.user_data.update({"br_uid": uid_b, "br_name": dname, "br_uname": uname, "br_entity_id": raw})
     await wait_msg.edit_text(
         f"✅ Found bot!\n🤖 <b>{dname}</b>" + (f" (@{uname})" if uname else "") +
-        f"\n🆔 <code>{uid}</code>\n\n📋 Select reason:",
+        f"\n🆔 <code>{uid_b}</code>\n\n📋 Select reason:",
         reply_markup=_build_full_cat_keyboard("BCAT"), parse_mode="HTML")
     return BR_CAT
 
@@ -3405,22 +3356,33 @@ async def br_category_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     await query.answer()
     parts = query.data.split("|")
-    if len(parts) < 2:
-        return BR_CAT
+    if len(parts) < 2: return BR_CAT
     cat_key = parts[1]
-    cat = FULL_REPORT_CATEGORIES.get(cat_key)
-    if not cat:
+    if cat_key == "back":
+        await query.edit_message_text("📋 Select reason:", reply_markup=_build_full_cat_keyboard("BCAT"))
         return BR_CAT
-    ctx.user_data.update({"br_cat_key": cat_key, "br_cat_label": f"{cat['emoji']} {cat['label']}",
-                          "br_api_reason": cat["api"]})
+    if cat_key not in FULL_REPORT_CATEGORIES: return BR_CAT
+    cat = FULL_REPORT_CATEGORIES[cat_key]
+    ctx.user_data.update({
+        "br_cat_key": cat_key,
+        "br_cat_label": f"{cat['emoji']} {cat['label']}",
+        "br_reason_api": cat["api"],
+    })
     if not cat["subs"]:
-        ctx.user_data["br_sub_label"] = "N/A"
+        ctx.user_data["br_sub_label"] = "—"
+        if cat_key == "dontlike":
+            ctx.user_data["br_custom_msg"] = ""
+            await query.edit_message_text(
+                f"✅ {cat['emoji']} {cat['label']}\n\n"
+                f"🔢 Reports per account (1–{MAX_REPORTS_PER_ACCOUNT}):",
+                parse_mode="HTML")
+            return BR_COUNT
         await query.edit_message_text(
-            f"✅ {cat['emoji']} <b>{cat['label']}</b>\n\n📝 Optional message or send <code>skip</code>:",
+            f"✅ {cat['emoji']} {cat['label']}\n\n📝 Optional message or send <code>skip</code>:",
             parse_mode="HTML")
         return BR_MSG
     await query.edit_message_text(
-        f"✅ {cat['emoji']} <b>{cat['label']}</b>\n\n📋 Select sub-category:",
+        f"✅ {cat['emoji']} {cat['label']}\n\n📋 Select sub-category:",
         reply_markup=_build_sub_keyboard(cat_key, "BSUB"), parse_mode="HTML")
     return BR_SUB
 
@@ -3431,17 +3393,14 @@ async def br_subcategory_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     if len(parts) >= 2 and parts[1] == "back":
         await query.edit_message_text("📋 Select reason:", reply_markup=_build_full_cat_keyboard("BCAT"))
         return BR_CAT
-    if len(parts) < 3:
-        return BR_SUB
-    _, cat_key, sub_key = parts[0], parts[1], parts[2]
+    if len(parts) < 3: return BR_SUB
+    cat_key, sub_key = parts[1], parts[2]
     cat = FULL_REPORT_CATEGORIES.get(cat_key)
-    if not cat:
-        return BR_SUB
-    sub_label = next((lbl for sk, lbl in cat["subs"] if sk == sub_key), sub_key)
-    ctx.user_data.update({"br_sub_label": sub_label})
+    if not cat or not cat["subs"]: return BR_SUB
+    sub_label = next((lbl for k, lbl in cat["subs"] if k == sub_key), "—")
+    ctx.user_data["br_sub_label"] = sub_label
     await query.edit_message_text(
-        f"✅ {cat['emoji']} <b>{cat['label']}</b> → <b>{sub_label}</b>\n\n"
-        f"📝 Optional message or send <code>skip</code>:",
+        f"✅ {cat['emoji']} {cat['label']} → <b>{sub_label}</b>\n\n📝 Optional message or send <code>skip</code>:",
         parse_mode="HTML")
     return BR_MSG
 
@@ -3462,26 +3421,22 @@ async def br_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(f"❌ Invalid! Enter 1–{MAX_REPORTS_PER_ACCOUNT}:"); return BR_COUNT
 
     target_raw   = ctx.user_data["br_entity_id"]
-    target_name  = ctx.user_data.get("br_name", target_raw)
-    cat_label    = ctx.user_data.get("br_cat_label", "Report")
-    sub_label    = ctx.user_data.get("br_sub_label", "N/A")
-    reason_api   = ctx.user_data["br_api_reason"]
+    target_name  = ctx.user_data["br_name"]
+    cat_label    = ctx.user_data["br_cat_label"]
+    sub_label    = ctx.user_data.get("br_sub_label", "—")
+    reason_api   = ctx.user_data["br_reason_api"]
     custom_msg   = ctx.user_data.get("br_custom_msg", "")
 
     auth_pairs = []
-    for phone in list(accounts.keys()):
-        c = await ensure_connected(phone)
-        if c:
-            auth_pairs.append((phone, c))
+    for phone, client in accounts.items():
+        try:
+            if await client.is_user_authorized():
+                auth_pairs.append((phone, client))
+        except: pass
     if not auth_pairs:
-        await update.message.reply_text("⚠️ No active accounts at execution time!")
-        return ConversationHandler.END
+        await update.message.reply_text("⚠️ No authorized accounts."); return ConversationHandler.END
 
     total = len(auth_pairs) * count
-    s = _stats_for(uid)
-    s["total"] = total
-    s["start_time"] = datetime.now()
-
     await update.message.reply_text(
         f"🚀 <b>BOT REPORT</b>\n🤖 {target_name}\n⚠️ {cat_label} → {sub_label}\n"
         f"📊 {total} ({len(auth_pairs)} × {count})\n━━━━━━━━━━━━━━━━",
@@ -3507,7 +3462,10 @@ async def br_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             bot_entity = resolved.get(phone)
             if bot_entity is None:
                 total_fail += 1; per_acc_fail[phone] += 1; continue
-            ok, status = await _report_bot_methods(phone, bot_entity, reason_api, custom_msg, sub_label)
+            try:
+                ok, status = await _report_bot_methods(phone, bot_entity, reason_api, custom_msg, sub_label)
+            except Exception as e:
+                ok, status = (False, f"UnexpectedErr: {type(e).__name__}")
             if ok:
                 total_ok += 1; per_acc_ok[phone] += 1
                 log_report_file(phone, target_raw, f"BOT-{cat_label}/{sub_label}", "SUCCESS", status)
@@ -3535,7 +3493,7 @@ async def br_execute(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         f"━━━━━━━━━━━━━━━━\n🎉 <b>BOT REPORT COMPLETE</b>\n\n"
         f"🤖 {target_name}\n⚠️ {cat_label} → {sub_label}\n"
-        f"✅ {total_ok} | ❌ {total_fail} | 📈 {rate:.1f}%\n\nPer-account:\n{breakdown}",
+        f"✅ {total_ok} | ❌ {total_fail} | 📈 {rate:.1f}%\n\n<b>Per-account:</b>\n{breakdown}",
         parse_mode="HTML")
     return ConversationHandler.END
 
@@ -3560,7 +3518,7 @@ async def _report_bot_methods(phone, bot_entity, reason_api, custom_msg, sub_lab
         methods_tried.append(f"M1-{type(e).__name__}")
 
     try:
-        await asyncio.sleep(random.uniform(0.2, 0.45))
+        await asyncio.sleep(random.uniform(0.2, 0.5))
         client = await ensure_connected(phone)
         if client:
             r = await client(functions.messages.ReportSpamRequest(peer=bot_entity))
@@ -3572,7 +3530,7 @@ async def _report_bot_methods(phone, bot_entity, reason_api, custom_msg, sub_lab
         methods_tried.append(f"M2-{type(e).__name__}")
 
     try:
-        await asyncio.sleep(random.uniform(0.2, 0.45))
+        await asyncio.sleep(random.uniform(0.2, 0.5))
         client = await ensure_connected(phone)
         if client:
             msgs = await client.get_messages(bot_entity, limit=1)
@@ -3588,7 +3546,7 @@ async def _report_bot_methods(phone, bot_entity, reason_api, custom_msg, sub_lab
         methods_tried.append(f"M3-{type(e).__name__}")
 
     try:
-        await asyncio.sleep(random.uniform(0.2, 0.45))
+        await asyncio.sleep(random.uniform(0.2, 0.5))
         client = await ensure_connected(phone)
         if client:
             photos = await client.get_profile_photos(bot_entity)
@@ -3607,6 +3565,154 @@ async def _report_bot_methods(phone, bot_entity, reason_api, custom_msg, sub_lab
 
     mark_proxy_result(proxy, False)
     return (False, f"All failed ({','.join(methods_tried)})")
+
+# ══════════════════════════════════════════════════════════════════════
+# 📡 PING BOT  (/pingbot) — animated stats + all accounts ping chat
+# ══════════════════════════════════════════════════════════════════════
+PING_MESSAGES = [
+    "🏓 <b>Ping!</b> Account online ✅",
+    "📡 <b>Ping received</b> — reporting for duty!",
+    "⚡ <b>Alive!</b> Session healthy 🟢",
+    "🛰 <b>Ping check</b> — connection stable",
+    "🚀 <b>Online</b> — ready for missions",
+    "✨ <b>Ping ok</b> — all systems nominal",
+    "🔋 <b>Alive</b> — session verified",
+]
+
+async def _do_single_ping(phone: str, target_chat_id: int) -> Tuple[bool, str]:
+    """Send a single ping message from a phone to the target chat."""
+    client = await ensure_connected(phone)
+    if not client:
+        return (False, "disconnected")
+    try:
+        # try normal resolve first
+        try:
+            entity = await client.get_input_entity(target_chat_id)
+        except Exception:
+            # try raw int channel-style id
+            raw = str(target_chat_id).lstrip("-")
+            if raw.startswith("100"):
+                raw = raw[3:]
+            try:
+                entity = await client.get_input_entity(int(f"-100{raw}"))
+            except Exception:
+                try:
+                    entity = await client.get_input_entity(target_chat_id)
+                except Exception as e:
+                    return (False, f"resolve fail: {type(e).__name__}")
+        try:
+            await simulate_typing(client, entity, seconds=random.uniform(0.4, 1.0))
+        except Exception:
+            pass
+        msg_text = random.choice(PING_MESSAGES) + f"\n<i>from</i> <code>{phone[-4:]}</code>"
+        await client.send_message(entity, msg_text, parse_mode="HTML")
+        return (True, "sent")
+    except errors.FloodWaitError as e:
+        return (False, f"FloodWait {e.seconds}s")
+    except errors.ChatWriteForbiddenError:
+        return (False, "no write permission")
+    except errors.UserBannedInChannelError:
+        return (False, "banned in channel")
+    except Exception as e:
+        return (False, f"{type(e).__name__}")
+
+async def pingbot_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        await update.message.reply_text("❌ Unauthorized."); return
+    if not accounts:
+        await update.message.reply_text("⚠️ No accounts! Use /addaccount."); return
+
+    # Frame 1: booting stats
+    stats_msg = await update.message.reply_text(
+        "📡 <b>PING BOT — Initializing...</b>\n\n"
+        "▱▱▱▱▱▱▱▱▱▱  0%",
+        parse_mode="HTML")
+    await asyncio.sleep(0.35)
+
+    active = await count_active()
+    total_accs = len(accounts)
+
+    frames = [
+        f"📡 <b>PING BOT — Scanning accounts...</b>\n\n"
+        f"▰▰▱▱▱▱▱▱▱▱  20%\n\n"
+        f"📱 Detected: <b>{total_accs}</b> account(s)",
+
+        f"📡 <b>PING BOT — Health check...</b>\n\n"
+        f"▰▰▰▰▱▱▱▱▱▱  40%\n\n"
+        f"📱 Total: <b>{total_accs}</b>\n"
+        f"🟢 Active: <b>{active}</b>\n"
+        f"🔴 Inactive: <b>{total_accs - active}</b>",
+
+        f"📡 <b>PING BOT — Loading route...</b>\n\n"
+        f"▰▰▰▰▰▰▱▱▱▱  60%\n\n"
+        f"🎯 Target chat: <code>{PING_CHAT_ID}</code>",
+
+        f"📡 <b>PING BOT — Priming clients...</b>\n\n"
+        f"▰▰▰▰▰▰▰▰▱▱  80%\n\n"
+        f"⏳ Preparing {active} live client(s)...",
+
+        f"📡 <b>PING BOT — Ready to fire!</b>\n\n"
+        f"▰▰▰▰▰▰▰▰▰▰  100%\n\n"
+        f"🚀 <b>Now pinging all accounts...</b>",
+    ]
+    for f in frames:
+        try: await stats_msg.edit_text(f, parse_mode="HTML")
+        except: pass
+        await asyncio.sleep(0.45)
+
+    # Ping message
+    ping_msg = await update.message.reply_text(
+        f"🚀 <b>Pinging all accounts → chat</b> <code>{PING_CHAT_ID}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━",
+        parse_mode="HTML")
+
+    total_ok = total_fail = 0
+    lines: List[str] = []
+    for i, phone in enumerate(list(accounts.keys()), 1):
+        # tiny animated marker before each ping
+        try:
+            await ping_msg.edit_text(
+                f"🚀 <b>Pinging all accounts → chat</b> <code>{PING_CHAT_ID}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"⏳ [{i}/{total_accs}] pinging <code>{phone[-4:]}</code>...",
+                parse_mode="HTML")
+        except: pass
+
+        try:
+            ok, note = await _do_single_ping(phone, PING_CHAT_ID)
+        except Exception as e:
+            ok, note = (False, f"UnexpectedErr: {type(e).__name__}")
+
+        if ok:
+            total_ok += 1
+            lines.append(f"✅ <code>{phone[-4:]}</code> → {note}")
+            add_log(f"📡 Ping OK: {phone[-4:]}")
+        else:
+            total_fail += 1
+            lines.append(f"❌ <code>{phone[-4:]}</code> → {note}")
+            add_log(f"📡 Ping FAIL: {phone[-4:]} ({note})")
+
+        # small delay to make it look like a real fan-out
+        await asyncio.sleep(random.uniform(0.6, 1.5))
+
+    rate = (total_ok / total_accs) * 100 if total_accs else 0
+    result_text = (
+        f"📡 <b>PING BOT — COMPLETE</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 Chat: <code>{PING_CHAT_ID}</code>\n"
+        f"📱 Accounts pinged: <b>{total_accs}</b>\n"
+        f"✅ Success: <b>{total_ok}</b>\n"
+        f"❌ Failed: <b>{total_fail}</b>\n"
+        f"📈 Success rate: <b>{rate:.1f}%</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        + "\n".join(lines)
+    )
+    if len(result_text) > 3900:
+        result_text = result_text[:3890] + "\n...(truncated)"
+    try:
+        await ping_msg.edit_text(result_text, parse_mode="HTML")
+    except Exception:
+        await update.message.reply_text(result_text, parse_mode="HTML")
 
 # ══════════════════════════════════════════════════════════════════════
 # 📧 GMAIL FLOW
@@ -3793,17 +3899,6 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel_cmd)], per_message=False, allow_reentry=True)
 
-    r2_conv = ConversationHandler(
-        entry_points=[CommandHandler("r2report", r2report_cmd)],
-        states={
-            R2_USER:  [MessageHandler(filters.TEXT & ~filters.COMMAND, r2_receive_user)],
-            R2_CAT:   [CallbackQueryHandler(r2_category_selected, pattern="^R2CAT\\|")],
-            R2_SUB:   [CallbackQueryHandler(r2_subcategory_selected, pattern="^R2SUB\\|")],
-            R2_MSG:   [MessageHandler(filters.TEXT & ~filters.COMMAND, r2_receive_msg)],
-            R2_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, r2_execute)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_cmd)], per_message=False, allow_reentry=True)
-
     br_conv = ConversationHandler(
         entry_points=[CommandHandler("botreport", botreport_cmd)],
         states={
@@ -3812,6 +3907,21 @@ def main():
             BR_SUB:    [CallbackQueryHandler(br_subcategory_selected, pattern="^BSUB\\|")],
             BR_MSG:    [MessageHandler(filters.TEXT & ~filters.COMMAND, br_receive_msg)],
             BR_COUNT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, br_execute)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_cmd)], per_message=False, allow_reentry=True)
+
+    r2_conv = ConversationHandler(
+        entry_points=[CommandHandler("r2report", r2report_cmd)],
+        states={
+            R2_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, r2_receive_user)],
+            R2_SHOT: [
+                MessageHandler(filters.PHOTO, r2_receive_shot),
+                CommandHandler("skip", r2_skip_shot),
+            ],
+            R2_CAT:  [CallbackQueryHandler(r2_category_selected, pattern="^R2CAT\\|")],
+            R2_SUB:  [CallbackQueryHandler(r2_subcategory_selected, pattern="^R2SUB\\|")],
+            R2_MSG:  [MessageHandler(filters.TEXT & ~filters.COMMAND, r2_receive_msg)],
+            R2_COUNT:[MessageHandler(filters.TEXT & ~filters.COMMAND, r2_execute)],
         },
         fallbacks=[CommandHandler("cancel", cancel_cmd)], per_message=False, allow_reentry=True)
 
@@ -3882,8 +3992,8 @@ def main():
     app.add_handler(rm_conv)
     app.add_handler(addmail_conv)
     app.add_handler(ar_conv)
-    app.add_handler(r2_conv)
     app.add_handler(br_conv)
+    app.add_handler(r2_conv)
     app.add_handler(report_conv)
     app.add_handler(groupreport_conv)
     app.add_handler(gmail_conv)
