@@ -1553,7 +1553,7 @@ async def animated_start(message):
     GR_GRP_LINK, GR_MSG_LINK, GR_REASON_CAT, GR_REASON_SUB, GR_CUSTOM_MSG, GR_COUNT,
     AM_EMAIL, AM_PASS, AM_NAME,
     R2_USER, R2_SHOT, R2_CAT, R2_SUB, R2_MSG, R2_COUNT,
-) = range(39)
+) = range(40)
 
 # ══════════════════════════════════════════════════════════════════════
 # 🎨 KEYBOARDS
